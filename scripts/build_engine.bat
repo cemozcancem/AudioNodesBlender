@@ -97,7 +97,7 @@ if %errorlevel% neq 0 (
     echo ERROR: Build failed.
     echo   * "unresolved external symbol zmq_*" -^> ZeroMQ static/shared mismatch.
     echo     The CMakeLists defines ZMQ_STATIC for static triplets; confirm the
-    echo     triplet you installed matches the one used here (%TRIPLET%).
+    echo     triplet you installed matches the one used here ^(%TRIPLET%^).
     exit /b 1
 )
 

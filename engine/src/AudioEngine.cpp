@@ -453,6 +453,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
 {
     // Diagnostic: log the first few callbacks after every device start so
     // silent-input problems are visible in the engine log.
+    callbackCount_.fetch_add(1, std::memory_order_relaxed);
     const int n = diagCallbackCount_.fetch_add(1, std::memory_order_acq_rel);
     const bool diag = n < 3;
     if (diag) {

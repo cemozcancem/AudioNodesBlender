@@ -289,9 +289,18 @@ class Engine:
         return r.get("data") if r and r.get("status") == "ok" else None
 
     def audio_running(self) -> bool:
-        """True when the engine has an open audio device and is processing."""
-        devices = self.get_devices()
-        return bool(devices and devices.get("audio_running"))
+        """True when the engine has an audio device AND audio is flowing.
+
+        An open device is not enough: on machines without sound hardware
+        (CI) a device can open and then never deliver a single block.
+        """
+        first = self.get_devices()
+        if not (first and first.get("audio_running")):
+            return False
+        time.sleep(0.5)
+        second = self.get_devices()
+        return bool(second) and \
+            second.get("audio_callbacks", 0) > first.get("audio_callbacks", 0)
 
     def get_midi_devices(self) -> Optional[Dict]:
         r = self.send({"type": "get_midi_devices"})
@@ -377,12 +386,17 @@ class Engine:
     # Audio analysis helpers (require FFTAnalyzerNode in chain)
     # ------------------------------------------------------------------
 
-    # Bin resolution at 44100 Hz with FFT_SIZE=2048: 44100/2048 ≈ 21.53 Hz/bin
-    FFT_BIN_HZ = 44100.0 / 2048.0
+    FFT_SIZE = 2048
 
     def freq_to_bin(self, freq_hz: float) -> int:
-        """Convert frequency in Hz to nearest FFT bin index."""
-        return round(freq_hz / self.FFT_BIN_HZ)
+        """Convert frequency in Hz to the nearest FFT bin index.
+
+        Uses the device's actual sample rate: bins are sample_rate / 2048 Hz
+        wide, so a 48 kHz device puts a tone in a lower bin than 44.1 kHz.
+        """
+        devices = self.get_devices() or {}
+        sample_rate = devices.get("sample_rate") or 44100.0
+        return round(freq_hz / (sample_rate / self.FFT_SIZE))
 
     def read_rms(self) -> float:
         """Return max of left/right RMS from shared memory (0.0 if unavailable)."""
