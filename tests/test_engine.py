@@ -372,27 +372,38 @@ def test_sequencer_step_advances(engine):
         f"Step did not advance (stayed at {initial['current_step']})"
 
 
+@pytest.mark.needs_audio
 def test_sequencer_step_resets_on_play(engine):
     """Playing after stop should reset to step 0."""
     if not _seq_available(engine):
         pytest.skip("Shared memory not available")
 
+    # 120 BPM = 125 ms per step: slow enough that a busy CI machine still
+    # reads the restarted sequencer before it moves past step 1.
     engine.create_node("seq_rst", "sequencer")
-    engine.set_param("seq_rst", "bpm", 600.0)
+    engine.set_param("seq_rst", "bpm", 120.0)
     engine.set_param("seq_rst", "play", 1.0)
-    time.sleep(0.3)
+    time.sleep(0.6)
+    before = engine.read_sequencer()
     engine.set_param("seq_rst", "stop", 1.0)
     time.sleep(0.05)
 
     # Play again — step should restart from 0
     engine.set_param("seq_rst", "play", 1.0)
-    time.sleep(0.02)
-    restarted = engine.read_sequencer()
+    restarted = None
+    deadline = time.time() + 0.5
+    while time.time() < deadline:
+        restarted = engine.read_sequencer()
+        if restarted and restarted["is_playing"]:
+            break
+        time.sleep(0.005)
     engine.set_param("seq_rst", "stop", 1.0)
     engine.delete_node("seq_rst")
 
-    assert restarted is not None
-    assert restarted["current_step"] <= 2, \
+    assert before is not None and before["current_step"] >= 3, \
+        f"Sequencer should have advanced before the restart: {before}"
+    assert restarted is not None and restarted["is_playing"]
+    assert restarted["current_step"] <= 1, \
         f"Step did not reset on re-play (step={restarted['current_step']})"
 
 
