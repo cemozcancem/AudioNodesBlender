@@ -43,10 +43,10 @@ else
 fi
 
 echo "==> [3/4] Packaging v${VERSION}..."
-"$SCRIPT_DIR/package_addon.sh" "$VERSION"
+"$SCRIPT_DIR/package_addon.sh" "$VERSION" --platform mac
 
 echo "==> [4/4] Verifying package..."
-ZIP="$PROJECT_DIR/dist/audio_nodes-${VERSION}.zip"
+ZIP="$PROJECT_DIR/dist/audio_nodes-${VERSION}-macos-arm64.zip"
 [ -f "$ZIP" ] || { echo "ERROR: $ZIP missing"; exit 1; }
 unzip -l "$ZIP" | grep -q "Frameworks/libzmq" || {
     echo "ERROR: bundled libzmq missing from zip"; exit 1; }

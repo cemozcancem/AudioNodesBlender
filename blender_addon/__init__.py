@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Audio Nodes",
     "author": "Audio Nodes Team",
-    "version": (5, 0, 0),
+    "version": (0, 0, 1),
     "blender": (5, 0, 0),
     "location": "Editor Type > Audio Nodes",
     "description": "Real-time audio processing and visualization with a node-based workflow",
