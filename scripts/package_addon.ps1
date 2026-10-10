@@ -82,6 +82,8 @@ function Emit-Zip([string]$Suffix, [string]$DropBinDir) {
     $per = Join-Path $Temp ("out" + $Suffix.Replace('-', '_'))
     New-Item -ItemType Directory -Force -Path $per | Out-Null
     Copy-Item $Stage (Join-Path $per 'audio_nodes') -Recurse
+    # Ship the license texts with the binaries (GPL/AGPL/MPL require it)
+    Copy-Item (Join-Path $ProjectDir 'LICENSE'), (Join-Path $ProjectDir 'THIRD_PARTY_NOTICES.md') (Join-Path $per 'audio_nodes')
     if ($DropBinDir) {
         $d = Join-Path $per "audio_nodes\bin\$DropBinDir"
         if (Test-Path $d) { Remove-Item $d -Recurse -Force }

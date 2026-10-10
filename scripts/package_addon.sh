@@ -164,6 +164,8 @@ emit_zip() {
     local stage="$TEMP_DIR/out_${label}"
     rm -rf "$stage"; mkdir -p "$stage"
     cp -R "$PACKAGE_DIR" "$stage/audio_nodes"
+    # Ship the license texts with the binaries (GPL/AGPL/MPL require it)
+    cp "$PROJECT_DIR/LICENSE" "$PROJECT_DIR/THIRD_PARTY_NOTICES.md" "$stage/audio_nodes/"
     if [ -n "$drop" ]; then
         rm -rf "$stage/audio_nodes/bin/$drop"
     fi
