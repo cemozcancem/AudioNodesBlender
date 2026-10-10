@@ -128,5 +128,5 @@ Want to help? Read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 GNU General Public License v3.0 - see [LICENSE](LICENSE).
 
-The audio engine is built on [JUCE](https://juce.com), which has its own licensing terms (AGPLv3 or a commercial JUCE license).
+The audio engine is built on [JUCE](https://juce.com), which has its own licensing terms (AGPLv3 or a commercial JUCE license). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for all third-party components.
 
