@@ -208,6 +208,7 @@ private:
     void reclaimFadedNodes(int numSamples);
     void addAudioNode(BaseNode* node, NodeKind kind);
     void removeAudioNode(BaseNode* node);
+    void unpublishNode(BaseNode* node);
 
     // Command thread:
     std::unique_ptr<BaseNode> instantiateNode(const std::string& nodeType,

@@ -127,6 +127,9 @@ void NodeManager::applyPendingCommands() {
 
             case GraphCommand::Type::RemoveNode: {
                 c.node->startFadeOut();
+                // Deleted nodes stop appearing in shared memory right away;
+                // only their audio fades out.
+                unpublishNode(c.node);
                 if (fading_.size() < fading_.capacity()) {
                     // Force-reclaim deadline: nodes that are not part of the
                     // audible graph never run applyFade, so a sample-count
@@ -221,6 +224,12 @@ void NodeManager::removeAudioNode(BaseNode* node) {
         }
     }
 
+    unpublishNode(node);
+}
+
+// Remove a node from the lists SharedMemoryBridge publishes (FFT analyzers,
+// sequencers, control sources). Safe to call more than once.
+void NodeManager::unpublishNode(BaseNode* node) {
     for (int i = 0; i < numFFTAnalyzers_; ++i) {
         if (fftAnalyzers_[i] == node) {
             // Preserve creation order so slot assignments stay stable.
