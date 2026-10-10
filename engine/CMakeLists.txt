@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(AudioNodesEngine VERSION 2.9.5 LANGUAGES C CXX)
+project(AudioNodesEngine VERSION 0.0.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -78,7 +78,7 @@ juce_add_gui_app(AudioNodesEngine
     PRODUCT_NAME "Audio Nodes Engine"
     BUNDLE_ID "com.audionodes.engine"
     COMPANY_NAME "AudioNodes"
-    VERSION "2.9.5"
+    VERSION "0.0.1"
     NEEDS_CURL FALSE
     NEEDS_WEB_BROWSER FALSE
 )
@@ -169,6 +169,8 @@ if(APPLE)
     set_target_properties(AudioNodesEngine PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/resources/Info.plist"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
     )
     
     # Link AVFoundation for audio permissions

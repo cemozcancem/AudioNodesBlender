@@ -25,7 +25,7 @@ public:
     }
     
     const juce::String getApplicationVersion() override {
-        return "3.1.0";
+        return JUCE_APPLICATION_VERSION_STRING;  // set from engine/CMakeLists.txt
     }
     
     bool moreThanOneInstanceAllowed() override {
