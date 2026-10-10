@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# C++ engine builds (JUCE etc. are fetched by CMake)
+engine/build/
+engine/build-*/
+build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# Compiled engine binaries: build them from source, ship them via GitHub Releases
+blender_addon/bin/darwin_arm64/AudioNodesEngine.app/Contents/MacOS/
+blender_addon/bin/darwin_arm64/AudioNodesEngine.app/Contents/_CodeSignature/
+blender_addon/bin/win_x64/*.exe
+blender_addon/bin/win_x64/*.dll
+# (the bundled dylibs in .../Contents/Frameworks/ are intentionally tracked)
+
+# Release packages
+dist/
+*.zip
+
+# Editors / OS / AI tools
+.vscode/
+.idea/
+.cursor/
+.claude/
+CLAUDE.md
+.DS_Store
+._*
+*.swp
+*~
