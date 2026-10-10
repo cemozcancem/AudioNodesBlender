@@ -220,8 +220,8 @@ def test_set_device_logs_renegotiated_settings(engine):
 
         # The new code path emits exactly this style of line. Without the
         # fix this string is never logged.
-        assert "[AudioEngine] Output device set to" in log_text, (
-            f"Expected '[AudioEngine] Output device set to ...' diagnostic "
+        assert "[AudioEngine] Output device switch:" in log_text, (
+            f"Expected '[AudioEngine] Output device switch: ...' diagnostic "
             f"line in engine log after set_device — the v3.0.2 fix isn't "
             f"running.\n--- engine log (after set_device) ---\n{log_text}"
         )

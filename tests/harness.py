@@ -294,9 +294,17 @@ class Engine:
     def read_shared_memory(self) -> Optional[Dict[str, Any]]:
         """
         Read one frame of visualization data from shared memory.
-        Returns None if the shared memory file doesn't exist yet or a torn read
-        is detected.
+        Retries torn reads (the engine was mid-write); returns None if the
+        shared memory file doesn't exist yet or every attempt was torn.
         """
+        for _ in range(20):
+            data = self._read_shared_memory_once()
+            if data is not None:
+                return data
+            time.sleep(0.001)
+        return None
+
+    def _read_shared_memory_once(self) -> Optional[Dict[str, Any]]:
         shm_path = f"/tmp/{SHM_NAME}"
         if not os.path.exists(shm_path):
             return None

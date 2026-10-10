@@ -275,7 +275,7 @@ def test_sequencer_patterns(engine):
     # Set different patterns for lanes 0-3
     for lane in range(4):
         pattern = 0b1010101010101010   # alternating steps
-        assert engine.set_param("seq_pat", f"pattern_{lane}", float(pattern))
+        assert engine.set_pattern("seq_pat", pattern, lane=lane)
     engine.delete_node("seq_pat")
 
 
@@ -325,6 +325,26 @@ def test_sequencer_shm_is_playing_flag(engine):
         "Sequencer still marked playing after stop command"
 
     engine.delete_node("seq_flag")
+
+
+def test_deleted_sequencer_leaves_shm_immediately(engine):
+    """A deleted node fades out for up to ~250 ms; during that time it must
+    not keep publishing its state in place of the live sequencer."""
+    if not _seq_available(engine):
+        pytest.skip("Shared memory not available")
+
+    engine.create_node("seq_old", "sequencer")
+    engine.set_param("seq_old", "bpm", 300.0)
+    time.sleep(0.05)
+    engine.delete_node("seq_old")
+    engine.create_node("seq_new", "sequencer")
+    engine.set_param("seq_new", "bpm", 120.0)
+    time.sleep(0.05)
+    state = engine.read_sequencer()
+    assert state is not None and state["bpm"] == 120.0, \
+        f"Shared memory still shows the deleted sequencer: {state}"
+
+    engine.delete_node("seq_new")
 
 
 def test_sequencer_step_advances(engine):
@@ -379,7 +399,7 @@ def test_sequencer_trigger_fires_on_active_step(engine):
         pytest.skip("Shared memory not available")
 
     engine.create_node("seq_trig", "sequencer")
-    engine.set_param("seq_trig", "pattern_0", float(0xFFFF))
+    engine.set_pattern("seq_trig", 0xFFFF)
     engine.set_param("seq_trig", "steps", 16.0)
     engine.set_param("seq_trig", "bpm", 600.0)
     engine.set_param("seq_trig", "gate_length", 0.9)
@@ -407,7 +427,7 @@ def test_sequencer_no_trigger_when_pattern_empty(engine):
         pytest.skip("Shared memory not available")
 
     engine.create_node("seq_notrig", "sequencer")
-    engine.set_param("seq_notrig", "pattern_0", 0.0)   # no active steps
+    engine.set_pattern("seq_notrig", 0)   # no active steps
     engine.set_param("seq_notrig", "steps", 16.0)
     engine.set_param("seq_notrig", "bpm", 600.0)
     engine.set_param("seq_notrig", "play", 1.0)
@@ -732,7 +752,7 @@ def test_sequencer_triggers_sampler(engine, sample_wav):
     engine.send({"type": "load_sample", "node_id": "samp_s", "file_path": sample_wav})
 
     # Set all steps active so every step fires
-    engine.set_param("seq_s", "pattern_0", float(0xFFFF))
+    engine.set_pattern("seq_s", 0xFFFF)
     engine.set_param("seq_s", "steps", 16.0)
     engine.set_param("seq_s", "bpm", 600.0)
     engine.set_param("seq_s", "gate_length", 0.5)
@@ -766,7 +786,7 @@ def test_sequencer_triggers_drum_sampler(engine, kick_wav, snare_wav):
     engine.send({"type": "load_drum_sample", "node_id": "drum_d",
                  "slot": 1, "file_path": snare_wav})
 
-    engine.set_param("seq_d", "pattern_0", float(0xFFFF))
+    engine.set_pattern("seq_d", 0xFFFF)
     engine.set_param("seq_d", "bpm", 600.0)
     engine.set_param("seq_d", "gate_length", 0.5)
 
@@ -1448,9 +1468,10 @@ def test_behavior_sequencer_all_on_pattern(engine):
         pytest.skip("Shared memory not available")
 
     engine.create_node("seq_all", "sequencer",
-                        params={"pattern_0": float(0xFFFFFFFFFFFFFFFF),
-                                "steps": 64.0, "bpm": 600.0,
-                                "gate_length": 0.8, "play": 1.0})
+                        params={"steps": 64.0, "bpm": 600.0,
+                                "gate_length": 0.8})
+    engine.set_pattern("seq_all", 0xFFFFFFFFFFFFFFFF)
+    engine.set_param("seq_all", "play", 1.0)
     time.sleep(0.05)
 
     fired = False
@@ -1473,8 +1494,9 @@ def test_behavior_sequencer_alternating_pattern(engine):
         pytest.skip("Shared memory not available")
 
     engine.create_node("seq_alt", "sequencer",
-                        params={"pattern_0": float(0xAAAAAAAAAAAAAAAA),
-                                "steps": 16.0, "bpm": 600.0, "play": 1.0})
+                        params={"steps": 16.0, "bpm": 600.0})
+    engine.set_pattern("seq_alt", 0xAAAAAAAAAAAAAAAA)
+    engine.set_param("seq_alt", "play", 1.0)
     time.sleep(0.05)
     s1 = engine.read_sequencer()
     time.sleep(0.4)
