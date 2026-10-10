@@ -8,7 +8,7 @@ Real-time audio processing and visualization with a node-based workflow in Blend
 - **Node-Based Workflow**: Connect audio nodes visually
 - **Real-time Processing**: C++ audio engine runs separately from Blender's UI thread
 - **Audio-Reactive Animations**: Drive any Blender property from audio using the Attribute node
-- **Cross-Platform**: macOS (Apple Silicon) and Windows support
+- **Platforms**: macOS (Apple Silicon) release builds; Windows can be built from source (see [WINDOWS_BUILD.md](WINDOWS_BUILD.md))
 
 ## Architecture
 
@@ -65,8 +65,8 @@ scripts\build_engine.bat Release
 
 ### From a release (recommended)
 
-1. Download the zip for your platform from [Releases](../../releases)
-   (`audio_nodes-<version>-macos-arm64.zip` or `audio_nodes-<version>-windows-x64.zip`)
+1. Download `audio_nodes-<version>-macos-arm64.zip` from [Releases](../../releases).
+   Release builds are macOS (Apple Silicon) only for now; on Windows, install from source below.
 2. In Blender: Edit > Preferences > Add-ons > Install from Disk, and pick the zip
 3. Enable "Audio Nodes". On first enable it installs `pyzmq` into Blender's Python automatically.
 
