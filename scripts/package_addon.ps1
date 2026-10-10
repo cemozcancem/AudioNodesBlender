@@ -27,7 +27,7 @@ $PackageName = "audio_nodes-$Version"
 
 $MacApp = Join-Path $AddonDir 'bin\darwin_arm64\AudioNodesEngine.app'
 $WinExe = Join-Path $AddonDir 'bin\win_x64\AudioNodesEngine.exe'
-$HaveMac = Test-Path $MacApp
+$HaveMac = Test-Path (Join-Path $MacApp 'Contents\MacOS\Audio Nodes Engine')
 $HaveWin = Test-Path $WinExe
 
 Write-Host "Packaging Audio Nodes add-on v$Version (platform: $Platform)..."
@@ -77,16 +77,18 @@ function New-ZipWithForwardSlashes([string]$SourceDir, [string]$OutFile) {
 }
 
 $Built = @()
-function Emit-Zip([string]$Suffix, [string]$DropBinDir) {
+function Emit-Zip([string]$Suffix, [string]$KeepBinDir) {
     $out = Join-Path $OutputDir "$PackageName$Suffix.zip"
     $per = Join-Path $Temp ("out" + $Suffix.Replace('-', '_'))
     New-Item -ItemType Directory -Force -Path $per | Out-Null
     Copy-Item $Stage (Join-Path $per 'audio_nodes') -Recurse
     # Ship the license texts with the binaries (GPL/AGPL/MPL require it)
     Copy-Item (Join-Path $ProjectDir 'LICENSE'), (Join-Path $ProjectDir 'THIRD_PARTY_NOTICES.md') (Join-Path $per 'audio_nodes')
-    if ($DropBinDir) {
-        $d = Join-Path $per "audio_nodes\bin\$DropBinDir"
-        if (Test-Path $d) { Remove-Item $d -Recurse -Force }
+    # Keep only this platform's engine folder
+    if ($KeepBinDir) {
+        Get-ChildItem (Join-Path $per "audio_nodes\bin") -Directory |
+            Where-Object { $_.Name -ne $KeepBinDir } |
+            Remove-Item -Recurse -Force
     }
     if (Test-Path $out) { Remove-Item $out -Force }
     New-ZipWithForwardSlashes (Join-Path $per 'audio_nodes') $out
@@ -98,11 +100,11 @@ function Emit-Zip([string]$Suffix, [string]$DropBinDir) {
 Write-Host "`nWriting packages..."
 switch ($Platform) {
     'combined' { Emit-Zip '' '' }
-    'mac'      { Emit-Zip '-macos-arm64' 'win_x64' }
-    'win'      { Emit-Zip '-windows-x64' 'darwin_arm64' }
+    'mac'      { Emit-Zip '-macos-arm64' 'darwin_arm64' }
+    'win'      { Emit-Zip '-windows-x64' 'win_x64' }
     'both'     {
-        if ($HaveMac) { Emit-Zip '-macos-arm64' 'win_x64' }
-        if ($HaveWin) { Emit-Zip '-windows-x64' 'darwin_arm64' }
+        if ($HaveMac) { Emit-Zip '-macos-arm64' 'darwin_arm64' }
+        if ($HaveWin) { Emit-Zip '-windows-x64' 'win_x64' }
         if (-not $HaveWin) {
             Write-Host "`nNOTE: no Windows zip - blender_addon\bin\win_x64\AudioNodesEngine.exe"
             Write-Host "      does not exist yet. Build it with scripts\build_engine.bat."

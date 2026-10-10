@@ -50,7 +50,7 @@ private:
     int pendingInputChannels_ = 0;
 
     // Platform-specific handle
-#if JUCE_MAC
+#if JUCE_MAC || JUCE_LINUX  // POSIX: file-backed mmap in /tmp
     int shmFd_ = -1;
 #elif JUCE_WINDOWS
     void* hMapFile_ = nullptr;

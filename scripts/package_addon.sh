@@ -3,12 +3,13 @@
 # Package Audio Nodes add-on as a .zip file for Blender installation
 #
 # Usage:
-#   ./scripts/package_addon.sh <version> [--platform mac|win|both|combined]
+#   ./scripts/package_addon.sh <version> [--platform mac|win|linux|both|combined]
 #
 #   --platform mac        only dist/audio_nodes-<v>-macos-arm64.zip
 #   --platform win        only dist/audio_nodes-<v>-windows-x64.zip
+#   --platform linux      only dist/audio_nodes-<v>-linux-x64.zip
 #   --platform both       one zip per platform that has an engine (default)
-#   --platform combined   the old single audio_nodes-<v>.zip with both engines
+#   --platform combined   the old single audio_nodes-<v>.zip with every engine
 #
 # One zip per platform is the default because the engine is half the
 # download: a Mac user has no use for AudioNodesEngine.exe and vice versa.
@@ -31,8 +32,8 @@ done
 VERSION=${VERSION:-"1.0.0"}
 
 case "$PLATFORM" in
-    mac|win|both|combined) ;;
-    *) echo "Error: --platform must be mac, win, both or combined" >&2; exit 2 ;;
+    mac|win|linux|both|combined) ;;
+    *) echo "Error: --platform must be mac, win, linux, both or combined" >&2; exit 2 ;;
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,19 +44,23 @@ PACKAGE_NAME="audio_nodes-${VERSION}"
 
 MAC_APP="$ADDON_DIR/bin/darwin_arm64/AudioNodesEngine.app"
 WIN_EXE="$ADDON_DIR/bin/win_x64/AudioNodesEngine.exe"
-HAVE_MAC=0; [ -d "$MAC_APP" ] && HAVE_MAC=1
+LINUX_BIN="$ADDON_DIR/bin/linux_x64/AudioNodesEngine"
+HAVE_MAC=0; [ -f "$MAC_APP/Contents/MacOS/Audio Nodes Engine" ] && HAVE_MAC=1
 HAVE_WIN=0; [ -f "$WIN_EXE" ] && HAVE_WIN=1
+HAVE_LINUX=0; [ -f "$LINUX_BIN" ] && HAVE_LINUX=1
 
 echo "Packaging Audio Nodes add-on v${VERSION} (platform: ${PLATFORM})..."
 echo "  macOS engine:   $([ $HAVE_MAC = 1 ] && echo present || echo MISSING)"
 echo "  Windows engine: $([ $HAVE_WIN = 1 ] && echo present || echo MISSING)"
+echo "  Linux engine:   $([ $HAVE_LINUX = 1 ] && echo present || echo MISSING)"
 
 # Check if engine binaries exist
-if [ $HAVE_MAC = 0 ] && [ $HAVE_WIN = 0 ]; then
+if [ $HAVE_MAC = 0 ] && [ $HAVE_WIN = 0 ] && [ $HAVE_LINUX = 0 ]; then
     echo "Error: No engine binaries found!"
     echo "Please build the engine first:"
     echo "  ./scripts/build_engine.sh          (macOS)"
     echo "  scripts\\build_engine.bat          (Windows)"
+    echo "  ./scripts/build_engine.sh          (Linux)"
     exit 1
 fi
 
@@ -69,6 +74,11 @@ if [ "$PLATFORM" = "win" ] && [ $HAVE_WIN = 0 ]; then
     echo "       $WIN_EXE"
     echo "       Build it on Windows (scripts\\build_engine.bat) or let CI"
     echo "       produce it - see WINDOWS_BUILD.md."
+    exit 1
+fi
+if [ "$PLATFORM" = "linux" ] && [ $HAVE_LINUX = 0 ]; then
+    echo "Error: --platform linux but there is no Linux engine at:"
+    echo "       $LINUX_BIN"
     exit 1
 fi
 
@@ -155,19 +165,21 @@ fi
 # Emit one zip per requested platform.
 #
 # The staging tree above (relinked + signed on macOS) is the master. For
-# each platform we copy it, drop the OTHER platform's engine, and zip.
+# each platform we copy it, keep only that platform's engine, and zip.
 # ---------------------------------------------------------------------------
 BUILT=()
 
 emit_zip() {
-    local label="$1" suffix="$2" drop="$3"
+    local label="$1" suffix="$2" keep="$3"
     local stage="$TEMP_DIR/out_${label}"
     rm -rf "$stage"; mkdir -p "$stage"
     cp -R "$PACKAGE_DIR" "$stage/audio_nodes"
     # Ship the license texts with the binaries (GPL/AGPL/MPL require it)
     cp "$PROJECT_DIR/LICENSE" "$PROJECT_DIR/THIRD_PARTY_NOTICES.md" "$stage/audio_nodes/"
-    if [ -n "$drop" ]; then
-        rm -rf "$stage/audio_nodes/bin/$drop"
+    if [ -n "$keep" ]; then
+        for d in "$stage/audio_nodes/bin"/*/; do
+            [ "$(basename "$d")" = "$keep" ] || rm -rf "$d"
+        done
     fi
     local name="${PACKAGE_NAME}${suffix}.zip"
     local out="$OUTPUT_DIR/$name"
@@ -189,21 +201,21 @@ case "$PLATFORM" in
         emit_zip combined "" ""
         ;;
     mac)
-        emit_zip mac "-macos-arm64" "win_x64"
+        emit_zip mac "-macos-arm64" "darwin_arm64"
         ;;
     win)
-        emit_zip win "-windows-x64" "darwin_arm64"
+        emit_zip win "-windows-x64" "win_x64"
+        ;;
+    linux)
+        emit_zip linux "-linux-x64" "linux_x64"
         ;;
     both)
-        [ $HAVE_MAC = 1 ] && emit_zip mac "-macos-arm64" "win_x64"
-        [ $HAVE_WIN = 1 ] && emit_zip win "-windows-x64" "darwin_arm64"
-        if [ $HAVE_WIN = 0 ]; then
-            echo ""
-            echo "NOTE: no Windows zip - blender_addon/bin/win_x64/AudioNodesEngine.exe"
-            echo "      does not exist yet. Build it on Windows or via CI"
-            echo "      (.github/workflows/build-windows-engine.yml), drop the exe"
-            echo "      in, and re-run this script."
-        fi
+        [ $HAVE_MAC = 1 ] && emit_zip mac "-macos-arm64" "darwin_arm64"
+        [ $HAVE_WIN = 1 ] && emit_zip win "-windows-x64" "win_x64"
+        [ $HAVE_LINUX = 1 ] && emit_zip linux "-linux-x64" "linux_x64"
+        echo ""
+        echo "Zips are only written for engines built on this machine. GitHub"
+        echo "Actions (.github/workflows/release.yml) builds all three platforms."
         ;;
 esac
 
@@ -228,6 +240,11 @@ for z in "${BUILT[@]}"; do
                     || { echo "  FAIL $name: no Windows engine"; exit 1; }
                  unzip -l "$z" | grep -q "MacOS/Audio Nodes Engine" \
                     && { echo "  FAIL $name: macOS engine should not be here"; exit 1; }
+                 ;;
+      *linux*)   unzip -l "$z" | grep -q "linux_x64/AudioNodesEngine" \
+                    || { echo "  FAIL $name: no Linux engine"; exit 1; }
+                 unzip -l "$z" | grep -qE "MacOS/Audio Nodes Engine|win_x64/AudioNodesEngine.exe" \
+                    && { echo "  FAIL $name: another platform's engine is here"; exit 1; }
                  ;;
     esac
     echo "  OK   $name"

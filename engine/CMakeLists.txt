@@ -48,6 +48,40 @@ if(WIN32)
             "Install it with: vcpkg install zeromq:x64-windows-static-md")
     endif()
     message(STATUS "ZeroMQ: linking ${ZMQ_LINK_TARGETS} (static=${ZMQ_IS_STATIC})")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Linux has no app bundle to ship libzmq.so in, and distros package
+    # different libzmq versions (with different dependencies). Build libzmq
+    # from source and link it statically so the engine needs nothing beyond
+    # glibc, ALSA, freetype and fontconfig, which every desktop has. Only
+    # plain localhost TCP is used, so encryption and extra transports are off.
+    set(BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    set(BUILD_STATIC ON CACHE BOOL "" FORCE)
+    set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(ZMQ_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(WITH_PERF_TOOL OFF CACHE BOOL "" FORCE)
+    set(WITH_DOCS OFF CACHE BOOL "" FORCE)
+    set(WITH_LIBSODIUM OFF CACHE BOOL "" FORCE)
+    set(WITH_LIBBSD OFF CACHE BOOL "" FORCE)
+    set(ENABLE_CURVE OFF CACHE BOOL "" FORCE)
+    set(ENABLE_DRAFTS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_CPACK OFF CACHE BOOL "" FORCE)
+    set(WITH_NORM OFF CACHE BOOL "" FORCE)
+    set(WITH_OPENPGM OFF CACHE BOOL "" FORCE)
+    set(WITH_VMCI OFF CACHE BOOL "" FORCE)
+    set(WITH_TLS OFF CACHE BOOL "" FORCE)
+    # libzmq 4.3.5 declares an ancient cmake_minimum_required that CMake 4
+    # refuses without this.
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+    FetchContent_Declare(
+        libzmq
+        GIT_REPOSITORY https://github.com/zeromq/libzmq.git
+        GIT_TAG v4.3.5
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(libzmq)
+    set(ZMQ_LINK_TARGETS libzmq-static)
+    set(ZMQ_IS_STATIC TRUE)
+    message(STATUS "ZeroMQ: built from source, linked statically")
 else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(ZMQ REQUIRED libzmq)
@@ -207,6 +241,11 @@ elseif(WIN32)
         OUTPUT_NAME "AudioNodesEngine"
         WIN32_EXECUTABLE TRUE
     )
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # No spaces in the binary name, same as Windows.
+    set_target_properties(AudioNodesEngine PROPERTIES
+        OUTPUT_NAME "AudioNodesEngine"
+    )
 endif()
 
 # Copy binary to blender addon bin folder post-build
@@ -238,6 +277,15 @@ elseif(WIN32)
             "$<TARGET_RUNTIME_DLLS:AudioNodesEngine>" "${OUTPUT_DIR}"
         COMMAND_EXPAND_LISTS
         COMMENT "Copying runtime DLLs (none if ZeroMQ was linked statically)"
+    )
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(OUTPUT_DIR "${CMAKE_SOURCE_DIR}/../blender_addon/bin/linux_x64")
+    add_custom_command(TARGET AudioNodesEngine POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${OUTPUT_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "$<TARGET_FILE:AudioNodesEngine>"
+            "${OUTPUT_DIR}/AudioNodesEngine"
+        COMMENT "Copying AudioNodesEngine to blender_addon/bin/linux_x64/"
     )
 endif()
 

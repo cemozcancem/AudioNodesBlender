@@ -81,6 +81,8 @@ bool AudioEngine::setupAudioDevice() {
     preferredType = "CoreAudio";
 #elif JUCE_WINDOWS
     preferredType = "Windows Audio";
+#elif JUCE_LINUX
+    preferredType = "ALSA";
 #endif
     
     for (auto* type : types) {
