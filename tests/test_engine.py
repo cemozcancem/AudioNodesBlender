@@ -2,7 +2,7 @@
 Engine integration tests — no Blender required.
 
 Run all:
-    cd AudioNodesV2/tests && python3.11 -m pytest test_engine.py -v
+    cd tests && python3.11 -m pytest test_engine.py -v
 
 Run one:
     python3.11 -m pytest test_engine.py::test_ping -v

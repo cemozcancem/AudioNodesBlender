@@ -19,7 +19,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-DEFAULT_BLENDER="/Users/cemozcan/.cache/blender-test/Blender.app/Contents/MacOS/Blender"
+DEFAULT_BLENDER="$HOME/.cache/blender-test/Blender.app/Contents/MacOS/Blender"
 [[ -x "$DEFAULT_BLENDER" ]] || DEFAULT_BLENDER="/Applications/Blender.app/Contents/MacOS/Blender"
 BLENDER="${BLENDER:-$DEFAULT_BLENDER}"
 

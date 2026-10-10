@@ -21,7 +21,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # can re-sign without tripping macOS App Management. If the user has a clean
 # Blender in /Applications and they're OK with "App Management" prompts that's
 # fine too — set BLENDER=… to override.
-DEFAULT_BLENDER="/Users/cemozcan/.cache/blender-test/Blender.app/Contents/MacOS/Blender"
+DEFAULT_BLENDER="$HOME/.cache/blender-test/Blender.app/Contents/MacOS/Blender"
 [[ -x "$DEFAULT_BLENDER" ]] || DEFAULT_BLENDER="/Applications/Blender.app/Contents/MacOS/Blender"
 BLENDER="${BLENDER:-$DEFAULT_BLENDER}"
 

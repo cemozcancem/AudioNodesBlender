@@ -40,7 +40,10 @@ agree on the approach before you spend time on it. For bugs, include:
   `scripts\build_engine.bat Release` (Windows). JUCE and other C++
   dependencies are downloaded by CMake. See [WINDOWS_BUILD.md](WINDOWS_BUILD.md).
 - Install the add-on into Blender: `scripts/install_addon.sh`
-- Python tests: `python -m pytest tests`
+- Python tests (no engine needed): `python3 tests/test_pure_logic.py`,
+  `python3 tests/test_control_logic.py`, `python3 tests/test_meter_and_layout.py`
+- Engine integration tests (needs a built engine):
+  `cd tests && python3 -m pytest test_engine.py test_devices.py`
 - Tests inside Blender: `scripts/run_blender_tests.sh`
 
 [ARCHITECTURE.md](ARCHITECTURE.md) explains how the Blender add-on talks to the

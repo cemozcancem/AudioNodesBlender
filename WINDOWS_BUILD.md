@@ -39,7 +39,7 @@ no runtime mismatch). The build script defaults to this triplet; override with
 ## 2. Build
 
 ```bat
-cd path\to\AudioNodesV2
+cd path\to\AudioNodesBlender
 scripts\build_engine.bat Release
 ```
 

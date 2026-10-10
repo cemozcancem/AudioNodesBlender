@@ -63,15 +63,20 @@ scripts\build_engine.bat Release
 
 ## Installation
 
+### From a release (recommended)
+
+1. Download the zip for your platform from [Releases](../../releases)
+   (`audio_nodes-<version>-macos-arm64.zip` or `audio_nodes-<version>-windows-x64.zip`)
+2. In Blender: Edit > Preferences > Add-ons > Install from Disk, and pick the zip
+3. Enable "Audio Nodes". On first enable it installs `pyzmq` into Blender's Python automatically.
+
+### From source
+
 1. Build the engine (see above)
 2. Copy or symlink `blender_addon/` to Blender's addons folder:
    - macOS: `~/Library/Application Support/Blender/5.0/scripts/addons/audio_nodes/`
    - Windows: `%APPDATA%\Blender Foundation\Blender\5.0\scripts\addons\audio_nodes\`
 3. Enable "Audio Nodes" in Blender's Add-ons preferences
-4. Install pyzmq for your Blender Python:
-   ```bash
-   /path/to/blender/python/bin/python -m pip install pyzmq
-   ```
 
 ## Usage
 
