@@ -34,7 +34,13 @@ fi
 
 echo "==> [2/4] Running engine tests..."
 if command -v pytest >/dev/null 2>&1; then
-    (cd "$PROJECT_DIR/tests" && pytest -x -q) || {
+    # Only the engine tests are pytest suites. tests/blender/ needs bpy
+    # (scripts/run_blender_tests.sh), and the rest are plain scripts.
+    (cd "$PROJECT_DIR/tests" \
+        && pytest -x -q test_engine.py test_devices.py \
+        && python3 test_pure_logic.py \
+        && python3 test_control_logic.py \
+        && python3 test_meter_and_layout.py) || {
         echo "ERROR: tests failed - not packaging."
         exit 1
     }
