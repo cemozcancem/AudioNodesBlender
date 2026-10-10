@@ -305,6 +305,7 @@ def _seq_available(engine) -> bool:
     return engine.read_sequencer() is not None
 
 
+@pytest.mark.needs_audio
 def test_sequencer_shm_is_playing_flag(engine):
     """is_playing in shared memory must reflect play/stop commands."""
     if not _seq_available(engine):
@@ -327,6 +328,7 @@ def test_sequencer_shm_is_playing_flag(engine):
     engine.delete_node("seq_flag")
 
 
+@pytest.mark.needs_audio
 def test_deleted_sequencer_leaves_shm_immediately(engine):
     """A deleted node fades out for up to ~250 ms; during that time it must
     not keep publishing its state in place of the live sequencer."""
@@ -347,6 +349,7 @@ def test_deleted_sequencer_leaves_shm_immediately(engine):
     engine.delete_node("seq_new")
 
 
+@pytest.mark.needs_audio
 def test_sequencer_step_advances(engine):
     """current_step must increment while the sequencer is playing."""
     if not _seq_available(engine):
@@ -393,6 +396,7 @@ def test_sequencer_step_resets_on_play(engine):
         f"Step did not reset on re-play (step={restarted['current_step']})"
 
 
+@pytest.mark.needs_audio
 def test_sequencer_trigger_fires_on_active_step(engine):
     """trigger_active must become True when a step with a set pattern fires."""
     if not _seq_available(engine):
@@ -666,6 +670,7 @@ def test_shared_memory_structure(engine):
     assert "rms_right" in data
 
 
+@pytest.mark.needs_audio
 def test_shared_memory_sequence_advances(engine):
     """Audio callback is running if sequence counter increments."""
     data1 = engine.read_shared_memory()
@@ -745,6 +750,7 @@ def test_engine_responsive_after_all_tests(engine):
 # 12. CONTROL SIGNAL ROUTING — sequencer triggers sampler / drum sampler
 # ===========================================================================
 
+@pytest.mark.needs_audio
 def test_sequencer_triggers_sampler(engine, sample_wav):
     """Sequencer lane 0 connected to sampler 'trigger' port must start playback."""
     engine.create_node("seq_s", "sequencer")
@@ -777,6 +783,7 @@ def test_sequencer_triggers_sampler(engine, sample_wav):
     assert engine.ping()
 
 
+@pytest.mark.needs_audio
 def test_sequencer_triggers_drum_sampler(engine, kick_wav, snare_wav):
     """Sequencer connected to drum sampler trig ports drives per-slot playback."""
     engine.create_node("seq_d", "sequencer")
@@ -1462,6 +1469,7 @@ def test_behavior_param_clamping_delay(engine):
     engine.delete_node("del_clamp")
 
 
+@pytest.mark.needs_audio
 def test_behavior_sequencer_all_on_pattern(engine):
     """Pattern 0xFFFF…F (all steps on) must fire trigger_active on every step."""
     if not _seq_available(engine):
@@ -1488,6 +1496,7 @@ def test_behavior_sequencer_all_on_pattern(engine):
     assert fired, "All-on pattern never fired trigger_active"
 
 
+@pytest.mark.needs_audio
 def test_behavior_sequencer_alternating_pattern(engine):
     """Alternating pattern (0xAAAA…) fires every other step — step counter must advance."""
     if not _seq_available(engine):
@@ -1509,6 +1518,7 @@ def test_behavior_sequencer_alternating_pattern(engine):
         "Alternating pattern: step counter should advance"
 
 
+@pytest.mark.needs_audio
 def test_behavior_two_sequencers_independent(engine):
     """Two sequencers at different BPMs must both advance steps independently."""
     if not _seq_available(engine):

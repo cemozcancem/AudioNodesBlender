@@ -26,6 +26,9 @@ import pytest
 
 from harness import Engine, ENGINE_BINARY
 
+# Switching devices needs real audio hardware.
+pytestmark = pytest.mark.needs_audio
+
 
 @pytest.fixture(scope="module")
 def engine(tmp_path_factory):

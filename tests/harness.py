@@ -19,10 +19,15 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 PROJECT_ROOT = Path(__file__).parent.parent
-ENGINE_BINARY = (
-    PROJECT_ROOT
-    / "blender_addon/bin/darwin_arm64/AudioNodesEngine.app/Contents/MacOS/Audio Nodes Engine"
-)
+if sys.platform == "win32":
+    ENGINE_BINARY = PROJECT_ROOT / "blender_addon/bin/win_x64/AudioNodesEngine.exe"
+elif sys.platform.startswith("linux"):
+    ENGINE_BINARY = PROJECT_ROOT / "blender_addon/bin/linux_x64/AudioNodesEngine"
+else:
+    ENGINE_BINARY = (
+        PROJECT_ROOT
+        / "blender_addon/bin/darwin_arm64/AudioNodesEngine.app/Contents/MacOS/Audio Nodes Engine"
+    )
 
 ZMQ_PORT = 5555
 
@@ -282,6 +287,11 @@ class Engine:
     def get_devices(self) -> Optional[Dict]:
         r = self.send({"type": "get_devices"})
         return r.get("data") if r and r.get("status") == "ok" else None
+
+    def audio_running(self) -> bool:
+        """True when the engine has an open audio device and is processing."""
+        devices = self.get_devices()
+        return bool(devices and devices.get("audio_running"))
 
     def get_midi_devices(self) -> Optional[Dict]:
         r = self.send({"type": "get_midi_devices"})

@@ -64,6 +64,11 @@ bool AudioEngine::setupAudioDevice() {
     if (const char* delay = std::getenv("AUDIONODES_TEST_DEVICE_OPEN_DELAY_MS")) {
         std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(delay)));
     }
+    // Test hook: behave like a machine with no audio hardware (CI runners),
+    // so the tests that need audio can be checked to skip correctly.
+    if (std::getenv("AUDIONODES_TEST_NO_AUDIO_DEVICE") != nullptr) {
+        return false;
+    }
 
     auto& types = deviceManager_.getAvailableDeviceTypes();
     if (types.isEmpty()) {
