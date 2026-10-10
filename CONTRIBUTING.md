@@ -36,25 +36,51 @@ agree on the approach before you spend time on it. For bugs, include:
 
 ## Building and testing
 
-- Build the engine: `scripts/build_engine.sh Release` (macOS) or
+- Build the engine: `scripts/build_engine.sh Release` (macOS and Linux) or
   `scripts\build_engine.bat Release` (Windows). JUCE and other C++
-  dependencies are downloaded by CMake. See [WINDOWS_BUILD.md](WINDOWS_BUILD.md).
+  dependencies are downloaded by CMake. The README lists the system packages
+  each platform needs; see also [WINDOWS_BUILD.md](WINDOWS_BUILD.md).
 - Install the add-on into Blender: `scripts/install_addon.sh`
 - Python tests (no engine needed): `python3 tests/test_pure_logic.py`,
   `python3 tests/test_control_logic.py`, `python3 tests/test_meter_and_layout.py`
 - Engine integration tests (needs a built engine):
-  `cd tests && python3 -m pytest test_engine.py test_devices.py`
+  `cd tests && python3 -m pytest test_engine.py test_devices.py`.
+  Tests marked `needs_audio` skip themselves on machines without working
+  audio hardware.
 - Tests inside Blender: `scripts/run_blender_tests.sh`
 
 [ARCHITECTURE.md](ARCHITECTURE.md) explains how the Blender add-on talks to the
 C++ engine (ZeroMQ commands, shared memory) and how to add a new node type.
 
+You don't need every platform yourself: each pull request is automatically
+built and tested on macOS, Windows and Linux, and the results appear on the
+pull request. The packaged zips are attached to each run as artifacts.
+
 ## Please don't commit
 
 - Build output (`engine/build*/`, `dist/`, `.zip` packages)
-- Compiled engine binaries (`.exe`, the `.app` executable). Releases are
-  built by the maintainer and attached to GitHub Releases.
+- Compiled engine binaries (`.exe`, the `.app` executable, the Linux
+  `AudioNodesEngine`). Releases are built by GitHub Actions.
 - `__pycache__`, virtual environments, editor or OS files
+
+## Making a release (maintainer)
+
+1. Set the new version in both places:
+   - `blender_addon/__init__.py`: `"version": (0, 0, 2)`
+   - `engine/CMakeLists.txt`: `project(AudioNodesEngine VERSION 0.0.2 ...)`
+     and the `VERSION "0.0.2"` in `juce_add_gui_app`
+2. Merge that to `main`, then tag it and push the tag:
+   ```bash
+   git tag v0.0.2
+   git push origin v0.0.2
+   ```
+3. GitHub Actions builds and tests all three platforms and creates a
+   **draft** release with the three zips and `SHA256SUMS.txt`. The run fails
+   if the tag doesn't match the versions in the code.
+4. Review the draft on the Releases page, edit the notes, and publish.
+
+`scripts/release.sh` still builds and packages the macOS zip locally, which
+is handy for testing a build before tagging.
 
 ## License
 
