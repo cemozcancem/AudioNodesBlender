@@ -39,9 +39,15 @@ def engine(tmp_path_factory):
         yield e
 
 
+# Placeholder devices that exist on headless Macs (e.g. CI runners) but
+# cannot be opened for real audio, so they are useless as a switch target.
+_PLACEHOLDER_DEVICES = {"Null Audio Device"}
+
+
 def _pick_alternative(devices, current):
-    """Return a device name from `devices` that is not `current`, or None."""
-    return next((d for d in devices if d != current), None)
+    """Return a usable device name from `devices` that is not `current`, or None."""
+    return next((d for d in devices
+                 if d != current and d not in _PLACEHOLDER_DEVICES), None)
 
 
 def test_get_devices_returns_current_selection(engine):

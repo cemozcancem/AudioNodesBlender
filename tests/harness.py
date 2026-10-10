@@ -215,10 +215,18 @@ class Engine:
     # ZMQ commands
     # ------------------------------------------------------------------
 
+    # Device changes can legitimately take many seconds (the engine tries
+    # several configurations and waits up to 15 s for CoreAudio), so they
+    # get a longer reply timeout than everything else.
+    SLOW_COMMANDS = {"set_device", "set_audio_settings"}
+
     def send(self, command: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if self._sock is None:
             raise EngineError("Engine not started")
         try:
+            import zmq
+            slow = command.get("type") in self.SLOW_COMMANDS
+            self._sock.setsockopt(zmq.RCVTIMEO, 20000 if slow else 2000)
             self._sock.send_string(json.dumps(command))
             return json.loads(self._sock.recv_string())
         except Exception as exc:
