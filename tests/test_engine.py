@@ -1681,3 +1681,27 @@ def test_engine_final_stability(engine):
     devices = engine.get_devices()
     assert devices is not None
     assert engine.get_midi_devices() is not None
+
+
+# ---------------------------------------------------------------------------
+# Startup with a slow audio device
+# ---------------------------------------------------------------------------
+
+def test_engine_responds_while_audio_device_opens(monkeypatch):
+    """A device that takes seconds to open (e.g. Bluetooth headsets) must
+    not stop Blender from reaching the engine."""
+    monkeypatch.setenv("AUDIONODES_TEST_DEVICE_OPEN_DELAY_MS", "4000")
+    with Engine(port=5577, startup_timeout=2.0, wait_for_audio=False) as e:
+        resp = e.send({"type": "get_devices"})
+        assert resp is not None and resp["status"] == "error", \
+            "get_devices must wait while the device is still opening"
+        assert "still opening" in resp["message"]
+
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            resp = e.send({"type": "get_devices"})
+            if resp and resp["status"] == "ok":
+                break
+            time.sleep(0.2)
+        assert resp and resp["status"] == "ok", \
+            "get_devices never succeeded after the device opened"

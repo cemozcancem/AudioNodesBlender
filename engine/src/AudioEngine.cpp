@@ -6,10 +6,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <functional>
 #include <future>
 #include <iostream>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #if JUCE_MAC
@@ -35,14 +37,15 @@ bool AudioEngine::start() {
         return true;
     }
     
-    if (!setupAudioDevice()) {
-        return false;
+    openingDevice_.store(true, std::memory_order_release);
+    const bool opened = setupAudioDevice();
+    if (opened) {
+        deviceManager_.addAudioCallback(this);
+        running_.store(true, std::memory_order_release);
     }
-    
-    deviceManager_.addAudioCallback(this);
-    running_.store(true, std::memory_order_release);
-    
-    return true;
+    openingDevice_.store(false, std::memory_order_release);
+
+    return opened;
 }
 
 void AudioEngine::stop() {
@@ -56,6 +59,12 @@ void AudioEngine::stop() {
 }
 
 bool AudioEngine::setupAudioDevice() {
+    // Test hook: simulate a device that is slow to open, like a Bluetooth
+    // headset switching profiles (tests/test_engine.py).
+    if (const char* delay = std::getenv("AUDIONODES_TEST_DEVICE_OPEN_DELAY_MS")) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(delay)));
+    }
+
     auto& types = deviceManager_.getAvailableDeviceTypes();
     if (types.isEmpty()) {
         return false;

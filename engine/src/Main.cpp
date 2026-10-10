@@ -77,12 +77,10 @@ public:
         commandServer_->setNodeManager(nodeManager_.get());
         commandServer_->setMIDIManager(midiManager_.get());
         
-        // Start audio engine
-        if (!audioEngine_->start()) {
-            std::cerr << "Warning: Failed to start audio engine" << std::endl;
-        }
-        
-        // Start command server
+        // Start the command server before opening the audio device. Opening
+        // can stall for a long time (e.g. Bluetooth headsets switching to
+        // their headset profile), and Blender must still be able to reach
+        // the engine meanwhile. Graph commands are queued until audio runs.
         if (!commandServer_->start()) {
             std::cerr << "Error: Failed to start command server" << std::endl;
             quit();
@@ -90,6 +88,11 @@ public:
         }
         
         std::cout << "Audio Nodes Engine ready on port " << port << std::endl;
+        
+        // Start audio engine
+        if (!audioEngine_->start()) {
+            std::cerr << "Warning: Failed to start audio engine" << std::endl;
+        }
         
         // Set up signal handler for graceful shutdown
         std::signal(SIGINT, signalHandler);

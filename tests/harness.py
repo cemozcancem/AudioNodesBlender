@@ -70,7 +70,8 @@ class Engine:
     """
 
     def __init__(self, port: int = ZMQ_PORT, startup_timeout: float = 5.0,
-                 log_path: Optional[Path] = None):
+                 log_path: Optional[Path] = None, wait_for_audio: bool = True,
+                 audio_timeout: float = 20.0):
         """
         Args:
             port: ZMQ port the engine binds to.
@@ -78,10 +79,16 @@ class Engine:
             log_path: If set, engine stdout/stderr are written here so tests
                 that need to inspect engine diagnostics can read this file
                 after `stop()`. When None, engine output is discarded.
+            wait_for_audio: After the engine answers, also wait until it has
+                finished opening the audio device (slow for Bluetooth
+                headsets), so tests start with audio running.
+            audio_timeout: How long to wait for the audio device to open.
         """
         self._port = port
         self._startup_timeout = startup_timeout
         self._log_path = log_path
+        self._wait_for_audio = wait_for_audio
+        self._audio_timeout = audio_timeout
         self._log_file = None
         self._proc: Optional[subprocess.Popen] = None
         self._ctx = None
@@ -138,11 +145,24 @@ class Engine:
         deadline = time.time() + self._startup_timeout
         while time.time() < deadline:
             if self.ping():
+                if self._wait_for_audio:
+                    self._wait_for_audio_device()
                 return
             time.sleep(0.1)
 
         self.stop()
         raise EngineError(f"Engine did not respond within {self._startup_timeout}s")
+
+    def _wait_for_audio_device(self):
+        deadline = time.time() + self._audio_timeout
+        while time.time() < deadline:
+            r = self.send({"type": "get_devices"})
+            if r is not None and "still opening" not in r.get("message", ""):
+                return
+            time.sleep(0.2)
+        self.stop()
+        raise EngineError(
+            f"Audio device did not open within {self._audio_timeout}s")
 
     def stop(self):
         try:

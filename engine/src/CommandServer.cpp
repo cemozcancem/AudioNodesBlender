@@ -351,6 +351,9 @@ json CommandServer::handleGetDevices(const json& /*cmd*/) {
     if (audioEngine_ == nullptr) {
         return {{"status", "error"}, {"message", "AudioEngine not initialized"}};
     }
+    if (audioEngine_->isOpeningDevice()) {
+        return {{"status", "error"}, {"message", "Audio device is still opening"}};
+    }
 
     auto inputDevices = audioEngine_->getInputDeviceNames();
     auto outputDevices = audioEngine_->getOutputDeviceNames();

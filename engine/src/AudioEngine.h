@@ -26,6 +26,10 @@ public:
     bool start();
     void stop();
     bool isRunning() const { return running_.load(std::memory_order_acquire); }
+    // True until start() has finished opening the device (or failed to).
+    // The command server runs during that time, so device queries must
+    // wait instead of reading the device manager mid-open.
+    bool isOpeningDevice() const { return openingDevice_.load(std::memory_order_acquire); }
     
     // Device selection
     juce::StringArray getInputDeviceNames() const;
@@ -84,6 +88,7 @@ private:
     MIDIManager* midiManager_ = nullptr;
     
     std::atomic<bool> running_{false};
+    std::atomic<bool> openingDevice_{true};
     std::atomic<double> sampleRate_{44100.0};
     std::atomic<int> bufferSize_{512};
     std::atomic<int> diagCallbackCount_{0};
