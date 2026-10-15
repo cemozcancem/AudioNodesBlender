@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <cstring>
 
-#if JUCE_MAC
+#if JUCE_MAC || JUCE_LINUX  // POSIX: file-backed mmap in /tmp
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -35,7 +35,7 @@ SharedMemoryBridge::~SharedMemoryBridge() {
 }
 
 bool SharedMemoryBridge::initialize() {
-#if JUCE_MAC
+#if JUCE_MAC || JUCE_LINUX  // POSIX: file-backed mmap in /tmp
     // Create or open shared memory
     // Use /tmp/ path for file-based shared memory (simpler cross-process compatibility)
     const char* shmPath = "/tmp/AudioNodesVisualization";
@@ -107,7 +107,7 @@ bool SharedMemoryBridge::initialize() {
 }
 
 void SharedMemoryBridge::cleanup() {
-#if JUCE_MAC
+#if JUCE_MAC || JUCE_LINUX  // POSIX: file-backed mmap in /tmp
     if (sharedMemory_ != nullptr) {
         munmap(sharedMemory_, SHARED_MEMORY_SIZE);
         sharedMemory_ = nullptr;

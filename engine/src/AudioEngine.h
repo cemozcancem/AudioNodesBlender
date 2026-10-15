@@ -4,6 +4,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <memory>
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 
 class NodeManager;
@@ -30,6 +31,9 @@ public:
     // The command server runs during that time, so device queries must
     // wait instead of reading the device manager mid-open.
     bool isOpeningDevice() const { return openingDevice_.load(std::memory_order_acquire); }
+    // Audio blocks processed since the engine started. Lets callers tell a
+    // device that is open AND delivering audio from one that is merely open.
+    uint64_t getCallbackCount() const { return callbackCount_.load(std::memory_order_relaxed); }
     
     // Device selection
     juce::StringArray getInputDeviceNames() const;
@@ -92,6 +96,7 @@ private:
     std::atomic<double> sampleRate_{44100.0};
     std::atomic<int> bufferSize_{512};
     std::atomic<int> diagCallbackCount_{0};
+    std::atomic<uint64_t> callbackCount_{0};
 
     // User-preferred settings (0 = no preference, let JUCE negotiate).
     // Honored on every device switch, unlike sampleRate_/bufferSize_

@@ -71,10 +71,13 @@ echo.
 
 REM ---- configure ----
 if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%"
+REM Visual Studio 2022 unless CMAKE_GENERATOR says otherwise (e.g. CI images
+REM that ship a newer Visual Studio).
+if "%CMAKE_GENERATOR%"=="" set CMAKE_GENERATOR=Visual Studio 17 2022
 
 echo [1/2] Configuring...
 cmake -S "%PROJECT_DIR%\engine" -B "%BUILD_DIR%" ^
-    -G "Visual Studio 17 2022" -A x64 ^
+    -G "%CMAKE_GENERATOR%" -A x64 ^
     -DCMAKE_TOOLCHAIN_FILE="%TOOLCHAIN%" ^
     -DVCPKG_TARGET_TRIPLET=%TRIPLET%
 if %errorlevel% neq 0 (
@@ -94,7 +97,7 @@ if %errorlevel% neq 0 (
     echo ERROR: Build failed.
     echo   * "unresolved external symbol zmq_*" -^> ZeroMQ static/shared mismatch.
     echo     The CMakeLists defines ZMQ_STATIC for static triplets; confirm the
-    echo     triplet you installed matches the one used here (%TRIPLET%).
+    echo     triplet you installed matches the one used here ^(%TRIPLET%^).
     exit /b 1
 )
 

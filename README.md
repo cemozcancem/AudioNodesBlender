@@ -29,13 +29,20 @@ Everything runs in real time while you work. You don't need to press play on the
 
 ## Install
 
-**You need:** Blender 5.0 or newer, on a Mac with Apple Silicon (M1 or later).
-Windows isn't available as a download yet; see [Building from source](#building-from-source).
+**You need:** Blender 5.0 or newer, on one of:
 
-1. Download `audio_nodes-<version>-macos-arm64.zip` from the [latest release](../../releases/latest). Don't unzip it.
+| Your computer | Download |
+|---|---|
+| Mac with Apple Silicon (M1 or later) | `audio_nodes-<version>-macos-arm64.zip` |
+| Windows, 64-bit | `audio_nodes-<version>-windows-x64.zip` |
+| Linux, 64-bit (x86) | `audio_nodes-<version>-linux-x64.zip` |
+
+Windows and Linux support is new. If something doesn't work, please [open an issue](../../issues).
+
+1. Download the zip for your computer from the [latest release](../../releases/latest). Don't unzip it.
 2. In Blender, open **Edit > Preferences > Add-ons**, click the arrow at the top right and choose **Install from Disk**, then pick the zip.
 3. Turn on **Audio Nodes** in the add-on list. The first time, it downloads one small helper library, so give it a moment.
-4. The first time the audio starts, macOS asks for microphone access. Click **Allow**, or Audio Nodes won't hear anything.
+4. On a Mac, the first time the audio starts, macOS asks for microphone access. Click **Allow**, or Audio Nodes won't hear anything.
 
 ## Your first audio-reactive scene
 
@@ -110,7 +117,7 @@ Press **Shift+A** in the Audio Nodes editor to add any of these.
 
 **Nothing happens / no sound comes in**
 - Check that the header of the Audio Nodes editor says **Engine: Running**. If it doesn't, click the play button next to it.
-- macOS may have blocked the microphone. Go to **System Settings > Privacy & Security > Microphone** and turn on Blender.
+- Your computer may have blocked the microphone. On a Mac, go to **System Settings > Privacy & Security > Microphone** and turn on Blender. On Windows, go to **Settings > Privacy & security > Microphone** and turn on **Let desktop apps access your microphone**.
 - Open the sidebar (**N**), go to the **Audio** tab, and check the right input and output devices are selected.
 
 **Bluetooth headphones sound bad or the audio lags**
@@ -155,7 +162,7 @@ Driver expressions use two functions the add-on registers: `audio_tap("<node>", 
 
 ### Building from source
 
-**Requirements:** CMake 3.22+, a C++20 compiler (Clang 14+ on macOS, Visual Studio 2022 on Windows) and ZeroMQ. JUCE and the other C++ libraries are downloaded by CMake.
+**Requirements:** CMake 3.22+ and a C++20 compiler (Clang 14+ on macOS, Visual Studio 2022 on Windows, GCC 11+ on Linux). JUCE and the other C++ libraries are downloaded by CMake.
 
 macOS (Apple Silicon):
 ```bash
@@ -163,18 +170,29 @@ brew install cmake zeromq
 ./scripts/build_engine.sh Release
 ```
 
-Windows (also needs vcpkg: `vcpkg install zeromq:x64-windows`):
+Windows (also needs vcpkg: `vcpkg install zeromq:x64-windows-static-md`, with `VCPKG_ROOT` set):
 ```batch
 scripts\build_engine.bat Release
 ```
 See [WINDOWS_BUILD.md](WINDOWS_BUILD.md) for the full Windows walkthrough.
 
+Linux (Ubuntu/Debian package names; ZeroMQ is built automatically):
+```bash
+sudo apt install build-essential cmake pkg-config libasound2-dev libfreetype-dev \
+  libfontconfig1-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
+  libxinerama-dev libxrandr-dev libxrender-dev
+./scripts/build_engine.sh Release
+```
+
 Then copy or symlink `blender_addon/` into Blender's add-ons folder as `audio_nodes`, and enable it:
 - macOS: `~/Library/Application Support/Blender/5.0/scripts/addons/audio_nodes/`
 - Windows: `%APPDATA%\Blender Foundation\Blender\5.0\scripts\addons\audio_nodes\`
+- Linux: `~/.config/blender/5.0/scripts/addons/audio_nodes/`
 
-To run the engine on its own for debugging:
+To run the engine on its own for debugging (macOS shown; on Windows and Linux it is `blender_addon/bin/win_x64/AudioNodesEngine.exe` or `blender_addon/bin/linux_x64/AudioNodesEngine`):
 `"blender_addon/bin/darwin_arm64/AudioNodesEngine.app/Contents/MacOS/Audio Nodes Engine" --zmq-port 5555`
+
+Every push and pull request is built and tested on macOS, Windows and Linux by [GitHub Actions](.github/workflows/build.yml).
 
 ### Contributing
 

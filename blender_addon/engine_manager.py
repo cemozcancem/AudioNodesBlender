@@ -35,11 +35,13 @@ def kill_orphan_engines(port=None):
         except Exception:
             port = 5555
 
-    if sys.platform == "darwin":
+    if sys.platform == "darwin" or sys.platform.startswith("linux"):
+        # The Linux binary is "AudioNodesEngine" (no spaces)
+        name = "Audio Nodes Engine" if sys.platform == "darwin" else "AudioNodesEngine"
         try:
             # Only match engines started with our port
             result = subprocess.run(
-                ["pkill", "-f", f"Audio Nodes Engine.*--zmq-port {port}"],
+                ["pkill", "-f", f"{name}.*--zmq-port {port}"],
                 capture_output=True,
                 timeout=5
             )
@@ -88,6 +90,8 @@ def get_platform_binary():
     elif sys.platform == "win32":
         # Windows
         binary_path = addon_dir / "bin" / "win_x64" / "AudioNodesEngine.exe"
+    elif sys.platform.startswith("linux"):
+        binary_path = addon_dir / "bin" / "linux_x64" / "AudioNodesEngine"
     else:
         print(f"Audio Nodes: Unsupported platform: {sys.platform}")
         return None

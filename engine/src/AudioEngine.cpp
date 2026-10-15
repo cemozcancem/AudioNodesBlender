@@ -64,6 +64,11 @@ bool AudioEngine::setupAudioDevice() {
     if (const char* delay = std::getenv("AUDIONODES_TEST_DEVICE_OPEN_DELAY_MS")) {
         std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(delay)));
     }
+    // Test hook: behave like a machine with no audio hardware (CI runners),
+    // so the tests that need audio can be checked to skip correctly.
+    if (std::getenv("AUDIONODES_TEST_NO_AUDIO_DEVICE") != nullptr) {
+        return false;
+    }
 
     auto& types = deviceManager_.getAvailableDeviceTypes();
     if (types.isEmpty()) {
@@ -76,6 +81,8 @@ bool AudioEngine::setupAudioDevice() {
     preferredType = "CoreAudio";
 #elif JUCE_WINDOWS
     preferredType = "Windows Audio";
+#elif JUCE_LINUX
+    preferredType = "ALSA";
 #endif
     
     for (auto* type : types) {
@@ -446,6 +453,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext(
 {
     // Diagnostic: log the first few callbacks after every device start so
     // silent-input problems are visible in the engine log.
+    callbackCount_.fetch_add(1, std::memory_order_relaxed);
     const int n = diagCallbackCount_.fetch_add(1, std::memory_order_acq_rel);
     const bool diag = n < 3;
     if (diag) {

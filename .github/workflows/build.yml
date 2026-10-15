@@ -1,0 +1,175 @@
+# Builds and tests the engine on macOS, Windows and Linux, and packages the
+# add-on for each platform.
+#
+#   push to main / pull request  -> build + test + package (zips kept as
+#                                   workflow artifacts for 14 days)
+#   push a tag like v0.0.2       -> the same, then a DRAFT GitHub release
+#                                   with all three zips attached
+#
+# Tests that need real audio hardware are skipped on these machines (they
+# have no sound card); see tests/conftest.py.
+
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple Silicon)
+            os: macos-14
+            platform: mac
+            suffix: macos-arm64
+          - name: Windows (x64)
+            os: windows-2022
+            platform: win
+            suffix: windows-x64
+          - name: Linux (x64)
+            # The oldest supported Ubuntu, so the engine runs on older distros too
+            os: ubuntu-22.04
+            platform: linux
+            suffix: linux-x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work out the version
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ---- dependencies ---------------------------------------------------
+      - name: Install dependencies (macOS)
+        if: matrix.platform == 'mac'
+        run: brew install zeromq
+
+      - name: Install dependencies (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libasound2-dev libfreetype6-dev \
+            libfontconfig1-dev libx11-dev libxcomposite-dev libxcursor-dev \
+            libxext-dev libxinerama-dev libxrandr-dev libxrender-dev
+
+      - name: Install ZeroMQ with vcpkg (Windows)
+        if: matrix.platform == 'win'
+        shell: bash
+        run: |
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" install zeromq:x64-windows-static-md
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
+
+      # ---- build ----------------------------------------------------------
+      - name: Build engine (macOS / Linux)
+        if: matrix.platform != 'win'
+        run: ./scripts/build_engine.sh Release
+
+      - name: Build engine (Windows)
+        if: matrix.platform == 'win'
+        shell: cmd
+        run: scripts\build_engine.bat Release
+
+      # ---- test -----------------------------------------------------------
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test requirements
+        run: python -m pip install pytest pyzmq
+
+      - name: Offline tests
+        working-directory: tests
+        run: |
+          python test_pure_logic.py
+          python test_control_logic.py
+          python test_meter_and_layout.py
+
+      - name: Engine tests
+        working-directory: tests
+        run: python -m pytest -v -rs test_engine.py test_devices.py
+
+      # ---- package --------------------------------------------------------
+      - name: Package (macOS / Linux)
+        if: matrix.platform != 'win'
+        env:
+          SKIP_BLENDER_INSTALL: "1"
+        run: ./scripts/package_addon.sh "${{ steps.version.outputs.version }}" --platform ${{ matrix.platform }}
+
+      - name: Package (Windows)
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: ./scripts/package_addon.ps1 -Version "${{ steps.version.outputs.version }}" -Platform win
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audio_nodes-${{ matrix.suffix }}
+          path: dist/audio_nodes-*-${{ matrix.suffix }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches the version in the code
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          addon=$(python3 -c "import ast,re; s=open('blender_addon/__init__.py').read(); d=ast.literal_eval(re.search(r'bl_info\s*=\s*(\{.*?\n\})', s, re.S).group(1)); print('.'.join(map(str, d['version'])))")
+          engine=$(sed -nE 's/^project\(AudioNodesEngine VERSION ([0-9.]+).*/\1/p' engine/CMakeLists.txt)
+          echo "tag=$tag add-on=$addon engine=$engine"
+          if [ "$tag" != "$addon" ] || [ "$tag" != "$engine" ]; then
+            echo "::error::Tag v$tag does not match the add-on version ($addon) and engine version ($engine). Update both before tagging."
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: audio_nodes-*
+          merge-multiple: true
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          cd dist
+          sha256sum *.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          title="Audio Nodes ${GITHUB_REF_NAME#v}"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" *.zip SHA256SUMS.txt --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" *.zip SHA256SUMS.txt \
+              --draft --title "$title" --generate-notes
+          fi

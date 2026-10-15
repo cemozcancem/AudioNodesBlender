@@ -385,6 +385,8 @@ json CommandServer::handleGetDevices(const json& /*cmd*/) {
             {"current_input", audioEngine_->getCurrentInputDevice().toStdString()},
             {"current_output", audioEngine_->getCurrentOutputDevice().toStdString()},
             {"input_channels", channelList},
+            {"audio_running", audioEngine_->isRunning()},
+            {"audio_callbacks", audioEngine_->getCallbackCount()},
             {"sample_rate", audioEngine_->getSampleRate()},
             {"buffer_size", audioEngine_->getBufferSize()},
             {"min_buffer_size", audioEngine_->getMinBufferSize()}

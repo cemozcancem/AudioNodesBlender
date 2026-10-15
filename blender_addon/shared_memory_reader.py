@@ -103,8 +103,8 @@ _mmap = None
 def _get_shm_path():
     """Get the shared memory path for the current platform."""
     import sys
-    if sys.platform == "darwin":
-        # macOS uses POSIX shared memory
+    if sys.platform == "darwin" or sys.platform.startswith("linux"):
+        # macOS and Linux: a file-backed mapping in /tmp
         return f"/tmp/{SHARED_MEMORY_NAME}"
     elif sys.platform == "win32":
         # Windows uses named shared memory directly
@@ -149,8 +149,8 @@ def _open_shared_memory():
     import sys
     
     try:
-        if sys.platform == "darwin":
-            # macOS: Open POSIX shared memory file
+        if sys.platform == "darwin" or sys.platform.startswith("linux"):
+            # macOS and Linux: open the file-backed mapping in /tmp
             shm_path = _get_shm_path()
             if not os.path.exists(shm_path):
                 return False
