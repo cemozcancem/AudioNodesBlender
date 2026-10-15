@@ -15,6 +15,10 @@
 
 set -euo pipefail
 
+# The test Blender runs its engine on its own port so it never collides with
+# (or cleans up) an engine belonging to a Blender you have open.
+export AUDIONODES_TEST_PORT="${AUDIONODES_TEST_PORT:-5599}"
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Prefer a writable copy outside /Applications so the addon's plist patcher
@@ -38,8 +42,9 @@ if [[ ! -x "$ENGINE_BIN" ]]; then
     echo "  build with: $REPO_ROOT/scripts/build_engine.sh Release" >&2
 fi
 
-# Stop any orphan engine left by a previous run so the new one can bind 5555.
-pkill -f "Audio Nodes Engine" 2>/dev/null || true
+# Stop an orphan engine left on the TEST port by a previous run. Scoped to
+# that port so an Audio Nodes engine in your own Blender (5555) is untouched.
+pkill -f "Engine.*--zmq-port ${AUDIONODES_TEST_PORT}( |$)" 2>/dev/null || true
 
 cd "$REPO_ROOT"
 
@@ -53,6 +58,6 @@ EXIT="$?"
 set -e
 
 # Belt-and-suspenders cleanup in case the addon left an engine running.
-pkill -f "Audio Nodes Engine" 2>/dev/null || true
+pkill -f "Engine.*--zmq-port ${AUDIONODES_TEST_PORT}( |$)" 2>/dev/null || true
 
 exit "$EXIT"

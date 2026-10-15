@@ -17,6 +17,18 @@ class Skip(Exception):
 REGISTER_FAILURES = []
 
 
+def apply_test_port(module="blender_addon"):
+    """Point the add-on at the test engine port (AUDIONODES_TEST_PORT, set by
+    the runner scripts) so tests never collide with an engine belonging to a
+    Blender the user has open. Call again after any addon re-enable, which
+    resets preferences to their defaults."""
+    import os
+    import bpy
+    port = int(os.environ.get("AUDIONODES_TEST_PORT", "5599"))
+    bpy.context.preferences.addons[module].preferences.zmq_port = port
+    return port
+
+
 class _Result:
     __slots__ = ("name", "status", "message", "elapsed")
 

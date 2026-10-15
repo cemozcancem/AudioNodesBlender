@@ -65,6 +65,13 @@ def main():
     if bpy.context.preferences.addons.get(ADDON_MODULE) is None:
         fail("addon not in context.preferences.addons after enable")
 
+    # Use the test port (set by the runner script) instead of 5555, so the
+    # engine never collides with one belonging to a Blender you have open.
+    import os
+    _port = int(os.environ.get("AUDIONODES_TEST_PORT", "5599"))
+    bpy.context.preferences.addons[ADDON_MODULE].preferences.zmq_port = _port
+    print(f">>> engine port: {_port}")
+
     # The addon swallows register-time exceptions with a try/except + print,
     # so a class can fail registration silently. Catch any such warning.
     register_failures = [

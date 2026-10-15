@@ -51,6 +51,11 @@ def _enable_addon():
         print(f"!!! addon_enable returned {res}")
         sys.exit(2)
 
+    # Use the test port (set by the runner script) instead of 5555, so the
+    # engine never collides with one belonging to a Blender you have open.
+    from tests.blender.utils import apply_test_port
+    print(f">>> engine port: {apply_test_port()}")
+
 
 def main():
     extra = _parse_args()
@@ -77,7 +82,7 @@ def main():
     ok = summarize(results)
 
     # Make sure the addon's engine subprocess, if still up, is gone before we
-    # exit so a follow-up run can rebind port 5555.
+    # exit so a follow-up run can rebind the test port.
     try:
         from blender_addon import engine_manager
         engine_manager.stop_engine()
