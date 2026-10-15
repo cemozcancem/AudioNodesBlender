@@ -30,8 +30,11 @@ dist/
 .vscode/
 .idea/
 .cursor/
-.claude/
-CLAUDE.md
+# The agent team config in .claude/ and CLAUDE.md is shared; keep personal
+# and generated parts out.
+.claude/settings.local.json
+.claude/worktrees/
+.claude/loop/runs/
 .DS_Store
 ._*
 *.swp
