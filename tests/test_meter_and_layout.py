@@ -195,6 +195,70 @@ check("control slots fit the struct",
       cpp_size)
 
 
+print("\n[4] Shared memory name per port: C++ vs add-on vs test harness (#5)")
+# Two Blenders, each with its own engine on its own port, must read their
+# own mapping. The rule exists three times and the three must agree, or a
+# reader silently attaches to nothing (or to another instance's meters).
+
+import ast
+
+def cpp_name_for_port(port):
+    """Mirror sharedMemoryNameForPort from the C++ source, after checking
+    that the source still has the shape this mirror assumes."""
+    base = re.search(r'SHARED_MEMORY_NAME\s*=\s*"([^"]+)"', header).group(1)
+    default = int(re.search(r"DEFAULT_ZMQ_PORT\s*=\s*(\d+)", header).group(1))
+    body = re.search(r"sharedMemoryNameForPort\(int\s+(\w+)\)\s*\{(.*?)\n\}",
+                     header, re.S)
+    if body is None:
+        return None
+    arg, code = body.group(1), body.group(2)
+    if not (re.search(rf"{arg}\s*!=\s*DEFAULT_ZMQ_PORT", code)
+            and re.search(rf'"_"\s*\+\s*std::to_string\({arg}\)', code)):
+        return None
+    return base if port == default else f"{base}_{port}"
+
+def addon_namespace():
+    """Pull the naming code out of the add-on reader without importing bpy."""
+    tree = ast.parse(reader)
+    keep = [n for n in tree.body
+            if (isinstance(n, ast.Assign) and any(
+                    getattr(t, "id", None) in ("SHARED_MEMORY_NAME", "DEFAULT_ZMQ_PORT")
+                    for t in n.targets))
+            or (isinstance(n, ast.FunctionDef)
+                and n.name in ("shared_memory_name", "_get_shm_path"))]
+    ns = {"Optional": object, "_current_port": lambda: 5555}
+    exec(compile(ast.Module(body=keep, type_ignores=[]), "reader", "exec"), ns)
+    return ns
+
+sys.path.insert(0, str(ROOT / "tests"))
+import harness  # noqa: E402
+
+addon = addon_namespace()
+check("add-on has shared_memory_name()", "shared_memory_name" in addon, True)
+check("C++ sharedMemoryNameForPort has the expected shape",
+      cpp_name_for_port(5555) is not None, True)
+check("engine opens the mapping via sharedMemoryNameForPort",
+      "sharedMemoryNameForPort(" in
+      (ENGINE / "SharedMemoryBridge.cpp").read_text(), True)
+
+for port, expected in ((5555, "AudioNodesVisualization"),
+                       (5599, "AudioNodesVisualization_5599"),
+                       (5621, "AudioNodesVisualization_5621")):
+    check(f"C++ name for {port}", cpp_name_for_port(port), expected)
+    if "shared_memory_name" in addon:
+        check(f"add-on name for {port}", addon["shared_memory_name"](port), expected)
+    check(f"harness name for {port}", harness.shm_name_for_port(port), expected)
+    if sys.platform == "darwin" or sys.platform.startswith("linux"):
+        if "_get_shm_path" in addon:
+            try:
+                got = addon["_get_shm_path"](port)
+            except TypeError:  # old reader: no port argument
+                got = addon["_get_shm_path"]()
+            check(f"add-on path for {port}", got, f"/tmp/{expected}")
+        check(f"harness path for {port}",
+              harness.Engine(port=port).shm_path, f"/tmp/{expected}")
+
+
 print("\n" + "=" * 60)
 print(f"FAILURES: {len(FAILURES)}")
 for name in FAILURES:

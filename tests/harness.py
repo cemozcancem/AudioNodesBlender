@@ -32,7 +32,26 @@ else:
 ZMQ_PORT = 5555
 
 # Shared memory layout — must match engine/src/common/SharedTypes.h
-SHM_NAME = "AudioNodesVisualization"
+SHM_NAME = "AudioNodesVisualization"   # mapping of the engine on ZMQ_PORT
+
+
+def shm_name_for_port(port: int) -> str:
+    """Name of the visualization mapping the engine on `port` writes.
+
+    Each engine publishes its own mapping so two Blenders never read each
+    other's meters. The default port keeps the old unsuffixed name.
+    The SAME rule lives in engine/src/common/SharedTypes.h
+    (sharedMemoryNameForPort) and blender_addon/shared_memory_reader.py
+    (shared_memory_name) - keep all three in step.
+    """
+    port = int(port)
+    return SHM_NAME if port == ZMQ_PORT else f"{SHM_NAME}_{port}"
+
+
+def shm_path_for_port(port: int) -> str:
+    """File backing the mapping on macOS/Linux (/tmp/<name>)."""
+    return f"/tmp/{shm_name_for_port(port)}"
+
 SHM_SIZE = 50112
 OFFSET_SEQUENCE  = 0
 OFFSET_FFT_LEFT  = 4
@@ -98,6 +117,15 @@ class Engine:
         self._proc: Optional[subprocess.Popen] = None
         self._ctx = None
         self._sock = None
+
+    @property
+    def port(self) -> int:
+        return self._port
+
+    @property
+    def shm_path(self) -> str:
+        """Shared-memory file written by THIS engine (depends on its port)."""
+        return shm_path_for_port(self._port)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -332,7 +360,7 @@ class Engine:
         return None
 
     def _read_shared_memory_once(self) -> Optional[Dict[str, Any]]:
-        shm_path = f"/tmp/{SHM_NAME}"
+        shm_path = self.shm_path
         if not os.path.exists(shm_path):
             return None
 
@@ -367,7 +395,7 @@ class Engine:
 
     def read_sequencer(self) -> Optional[Dict[str, Any]]:
         """Read sequencer state from shared memory. Returns None if unavailable."""
-        shm_path = f"/tmp/{SHM_NAME}"
+        shm_path = self.shm_path
         if not os.path.exists(shm_path):
             return None
         try:

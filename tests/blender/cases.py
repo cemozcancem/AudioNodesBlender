@@ -731,6 +731,23 @@ def case_audio_callback_advancing():
     )
 
 
+def case_shared_memory_path_follows_engine_port():
+    """Issue #5: each Blender reads the mapping of ITS engine. On the test
+    port (5599) that is AudioNodesVisualization_5599, never the default
+    file that a Blender the user has open writes to."""
+    import sys
+    smr = _addon().shared_memory_reader
+    port = apply_test_port(ADDON_MODULE)
+    expected = ("AudioNodesVisualization" if port == 5555
+                else f"AudioNodesVisualization_{port}")
+    assert_eq(smr.shared_memory_name(port), expected,
+              "mapping name for the test port")
+    if sys.platform == "win32":
+        assert_eq(smr._get_shm_path(), expected, "reader mapping name")
+    else:
+        assert_eq(smr._get_shm_path(), f"/tmp/{expected}", "reader path")
+
+
 def case_engine_stop_via_operator():
     addon = _addon()
     if not addon.engine_manager.is_engine_running():
