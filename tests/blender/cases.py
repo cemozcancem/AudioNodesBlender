@@ -16,7 +16,7 @@ from pathlib import Path
 
 import bpy
 
-from .utils import Skip, assert_eq, assert_true, wait_until
+from .utils import Skip, apply_test_port, assert_eq, assert_true, wait_until
 
 ADDON_MODULE = "blender_addon"
 TESTSAMPLES = Path(__file__).resolve().parents[2] / "testsamples"
@@ -128,6 +128,7 @@ def case_addon_disable_reenable():
         bpy.context.preferences.addons.get(ADDON_MODULE) is not None,
         "addon failed to re-enable",
     )
+    apply_test_port(ADDON_MODULE)  # re-enable reset the port preference
     # Round-trip proof: after re-enable, creating the tree type must work.
     tree = bpy.data.node_groups.new(name="ReenableProbe", type="AudioNodeTree")
     assert_eq(tree.bl_idname, "AudioNodeTree", "node tree type unusable after re-enable")

@@ -1,0 +1,70 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./scripts/build_engine.sh:*)",
+      "Bash(./scripts/run_blender_tests.sh:*)",
+      "Bash(./scripts/run_fresh_install_test.sh:*)",
+      "Bash(SKIP_BLENDER_INSTALL=1 ./scripts/package_addon.sh:*)",
+      "Bash(python3 test_pure_logic.py)",
+      "Bash(python3 test_control_logic.py)",
+      "Bash(python3 test_meter_and_layout.py)",
+      "Bash(python3 -m pytest:*)",
+      "Bash(python3.11 -m pytest:*)",
+      "Bash(python3 -m py_compile:*)",
+      "Bash(bash -n:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git switch:*)",
+      "Bash(git fetch:*)",
+      "Bash(git stash:*)",
+      "Bash(git worktree:*)",
+      "Bash(git push -u origin agent/:*)",
+      "Bash(git push origin agent/:*)",
+      "Bash(gh issue:*)",
+      "Bash(gh label:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh pr comment:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)",
+      "Bash(pgrep:*)",
+      "Bash(system_profiler SPAudioDataType:*)"
+    ],
+    "deny": [
+      "Bash(git push origin main:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git tag:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh release:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard_paths.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard_bash.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

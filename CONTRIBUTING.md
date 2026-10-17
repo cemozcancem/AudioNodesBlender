@@ -63,6 +63,25 @@ pull request. The packaged zips are attached to each run as artifacts.
   `AudioNodesEngine`). Releases are built by GitHub Actions.
 - `__pycache__`, virtual environments, editor or OS files
 
+## Working with the agent team
+
+This repo includes a Claude Code agent team (`CLAUDE.md`, `.claude/`). Run
+`claude` in the repo, then:
+
+- `/pm add <what you want>`: the PM agent turns it into a GitHub issue with
+  acceptance criteria, labelled `agent:queued`.
+- `/pm run`: the PM takes one queued issue, has the specialist agents
+  (`engine-dev`, `addon-dev`, `release-engineer`, `test-engineer`,
+  `docs-writer`, `reviewer`) implement, test and review it in a separate git
+  worktree, then opens a pull request and stops. You review and merge.
+- `/pm status`: shows the board.
+
+Agents can't push to `main`, merge, tag, release, edit files outside the repo
+or kill an engine that isn't on their own test port; `.claude/settings.json`
+and `.claude/hooks/` enforce this. Engine tests use port 5555 and the shared
+`/tmp` mapping, so close Audio Nodes in your own Blender (or let the PM pause)
+while a run is testing.
+
 ## Making a release (maintainer)
 
 1. Set the new version in both places:

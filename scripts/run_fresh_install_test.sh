@@ -17,6 +17,10 @@
 
 set -euo pipefail
 
+# The test Blender runs its engine on its own port so it never collides with
+# (or cleans up) an engine belonging to a Blender you have open.
+export AUDIONODES_TEST_PORT="${AUDIONODES_TEST_PORT:-5599}"
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 DEFAULT_BLENDER="$HOME/.cache/blender-test/Blender.app/Contents/MacOS/Blender"
@@ -55,8 +59,8 @@ echo ">>> packaging addon zip"
 "$REPO_ROOT/scripts/package_addon.sh" "$VERSION" >/dev/null
 [[ -f "$ZIP" ]] || { echo "ERROR: zip not produced at $ZIP" >&2; exit 2; }
 
-# Stop any orphan engine before the test binds 5555.
-pkill -f "Audio Nodes Engine" 2>/dev/null || true
+# Stop an orphan engine on the TEST port only (your own Blender keeps 5555).
+pkill -f "Engine.*--zmq-port ${AUDIONODES_TEST_PORT}( |$)" 2>/dev/null || true
 
 set +e
 "$BLENDER" \
@@ -73,7 +77,7 @@ set -e
 rm -rf "$USER_ADDONS/audio_nodes"
 rm -f "$ZIP"
 
-pkill -f "Audio Nodes Engine" 2>/dev/null || true
+pkill -f "Engine.*--zmq-port ${AUDIONODES_TEST_PORT}( |$)" 2>/dev/null || true
 
 if [[ "$EXIT" -ne 0 ]]; then
     echo "FAIL fresh-install (exit $EXIT)"
