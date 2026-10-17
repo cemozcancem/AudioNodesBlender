@@ -252,11 +252,10 @@ class AudioMIDIMonitorNode(AudioNodeBase):
                 col.alert = True
                 col.label(text="Engine: NOT RUNNING", icon='ERROR')
             
-            # Check shared memory file
-            import os
-            shm_path = "/tmp/AudioNodesVisualization"
-            if os.path.exists(shm_path):
-                size = os.path.getsize(shm_path)
+            # Check the shared memory for this Blender's engine port
+            from ... import shared_memory_reader
+            size = shared_memory_reader.published_size()
+            if size is not None:
                 col.label(text=f"Shared mem: {size} bytes", icon='CHECKMARK')
             else:
                 col.alert = True
