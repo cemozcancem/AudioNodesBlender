@@ -167,6 +167,8 @@ static bool runOnMessageThread(std::function<bool()> action) {
     // Generous: a device switch can try several ways of opening the
     // device, and each CoreAudio teardown/reopen takes real time. Timing
     // out early here used to abandon a switch that was about to succeed.
+    // Keep in sync with ENGINE_DEVICE_SWITCH_LIMIT_S in
+    // blender_addon/command_client.py (the add-on must wait longer).
     if (future.wait_for(std::chrono::seconds(15)) != std::future_status::ready) {
         std::cerr << "[AudioEngine] device change timed out waiting for the "
                      "message thread" << std::endl;
