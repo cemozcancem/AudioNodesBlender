@@ -12,6 +12,7 @@ import contextlib
 import math
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -1760,12 +1761,14 @@ def test_engine_responds_while_audio_device_opens(monkeypatch):
 def _engine_running_on(port: int) -> bool:
     """Is any engine process bound to `port`? (scoped by --zmq-port)"""
     return subprocess.run(
-        ["pgrep", "-f", f"--zmq-port {port}( |$)"],
+        ["pgrep", "-f", "--", f"--zmq-port {port}( |$)"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     ).returncode == 0
 
 
 @pytest.mark.needs_audio
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="uses /tmp mapping paths and pgrep")
 def test_two_engines_publish_to_their_own_shared_memory():
     """Two Blenders, each with its own engine on its own port, must each see
     their own meters. Both engines used to write the one shared file, so
