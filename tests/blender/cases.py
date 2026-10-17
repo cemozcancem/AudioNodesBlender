@@ -769,17 +769,49 @@ def case_sequencer_output_channels_are_per_node():
                     f"{socket_name} channel {ch_a!r} is not scoped to its node")
 
 
+SHARED_TYPES_H = (Path(__file__).resolve().parents[2]
+                  / "engine" / "src" / "common" / "SharedTypes.h")
+
+
+def _cpp_shared_layout():
+    """Parse the shared-memory layout pinned by SharedTypes.h static_asserts."""
+    import re
+    if not SHARED_TYPES_H.is_file():
+        raise Skip(f"SharedTypes.h not found at {SHARED_TYPES_H}; "
+                   "cannot check the shared-memory layout")
+    header = SHARED_TYPES_H.read_text()
+
+    def size_of(struct):
+        found = re.search(rf"sizeof\({struct}\)\s*==\s*(\d+)", header)
+        assert_true(found, f"no sizeof({struct}) static_assert in SharedTypes.h")
+        return int(found.group(1))
+
+    offsets = {name: int(value) for name, value in re.findall(
+        r"offsetof\(AudioVisualizationData,\s*(\w+)\)\s*==\s*(\d+)", header)}
+    return {
+        "size": size_of("AudioVisualizationData"),
+        "seq_slot_size": size_of("SequencerSlot"),
+        "offsets": offsets,
+    }
+
+
 def case_sequencer_slots_in_shared_memory():
     """The reader must expose a per-sequencer slot map, keyed by node id."""
     addon = _addon()
     smr = addon.shared_memory_reader
 
-    assert_eq(smr.SHARED_MEMORY_SIZE, 50368,
-              "shared memory size does not match the C++ struct "
-              "(SequencerSlot[4] appended in 4.14)")
-    assert_eq(smr.OFFSET_NUM_SEQUENCERS, 50112, "num_sequencers offset drifted")
-    assert_eq(smr.OFFSET_SEQUENCER_SLOTS, 50144, "sequencer_slots offset drifted")
-    assert_eq(smr.SEQ_SLOT_SIZE, 56, "SequencerSlot size drifted")
+    # Compare against the layout the engine is actually built with, read from
+    # the static_asserts in SharedTypes.h, not against hard-coded numbers.
+    layout = _cpp_shared_layout()
+    assert_eq(smr.SHARED_MEMORY_SIZE, layout["size"],
+              "SHARED_MEMORY_SIZE does not match sizeof(AudioVisualizationData) "
+              "in SharedTypes.h")
+    assert_eq(smr.OFFSET_NUM_SEQUENCERS, layout["offsets"].get("num_sequencers"),
+              "num_sequencers offset does not match SharedTypes.h")
+    assert_eq(smr.OFFSET_SEQUENCER_SLOTS, layout["offsets"].get("sequencer_slots"),
+              "sequencer_slots offset does not match SharedTypes.h")
+    assert_eq(smr.SEQ_SLOT_SIZE, layout["seq_slot_size"],
+              "SEQ_SLOT_SIZE does not match sizeof(SequencerSlot) in SharedTypes.h")
 
     data = smr.read_visualization_data()
     if data is None:
