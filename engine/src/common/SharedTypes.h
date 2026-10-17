@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <string>
 
 // =============================================================================
 // MIDI Data Structure
@@ -189,12 +190,29 @@ static_assert(offsetof(AudioVisualizationData, sequencer_slots) == 50144, "layou
 static_assert(offsetof(AudioVisualizationData, num_control_nodes) == 50368, "layout");
 static_assert(offsetof(AudioVisualizationData, control_slots) == 50400, "layout");
 
-// Shared memory name - must match Python side
+// Shared memory base name - must match Python side
 constexpr const char* SHARED_MEMORY_NAME = "AudioNodesVisualization";
 constexpr size_t SHARED_MEMORY_SIZE = sizeof(AudioVisualizationData);
 
 // ZeroMQ default port
 constexpr int DEFAULT_ZMQ_PORT = 5555;
+
+// Name of the visualization mapping for the engine on `zmqPort` (issue #5).
+// Each engine gets its own mapping, so two Blender instances with engines on
+// different ports don't overwrite each other's meters/scopes/spectrums.
+//   - default port (5555): "AudioNodesVisualization"   (unchanged, old name)
+//   - any other port:      "AudioNodesVisualization_<port>"
+// POSIX uses the file "/tmp/" + name; Windows uses it as the named mapping.
+// THE SAME RULE lives in blender_addon/shared_memory_reader.py and
+// tests/harness.py - change all three together.
+// Called once at startup (message thread), never on the audio thread.
+inline std::string sharedMemoryNameForPort(int zmqPort) {
+    std::string name(SHARED_MEMORY_NAME);
+    if (zmqPort != DEFAULT_ZMQ_PORT) {
+        name += "_" + std::to_string(zmqPort);
+    }
+    return name;
+}
 
 // Audio constants
 constexpr int MAX_BLOCK_SIZE = 4096;

@@ -6,6 +6,7 @@
 #include "nodes/BangNode.h"
 #include <algorithm>
 #include <cstring>
+#include <string>
 
 #if JUCE_MAC || JUCE_LINUX  // POSIX: file-backed mmap in /tmp
 #include <sys/mman.h>
@@ -34,13 +35,16 @@ SharedMemoryBridge::~SharedMemoryBridge() {
     cleanup();
 }
 
-bool SharedMemoryBridge::initialize() {
+bool SharedMemoryBridge::initialize(int zmqPort) {
+    const std::string shmName = sharedMemoryNameForPort(zmqPort);
 #if JUCE_MAC || JUCE_LINUX  // POSIX: file-backed mmap in /tmp
     // Create or open shared memory
-    // Use /tmp/ path for file-based shared memory (simpler cross-process compatibility)
-    const char* shmPath = "/tmp/AudioNodesVisualization";
+    // Use /tmp/ path for file-based shared memory (simpler cross-process compatibility).
+    // The file is deliberately left in place on exit so readers keep their
+    // mapping across engine restarts.
+    const std::string shmPath = "/tmp/" + shmName;
 
-    shmFd_ = open(shmPath, O_RDWR | O_CREAT, 0666);
+    shmFd_ = open(shmPath.c_str(), O_RDWR | O_CREAT, 0666);
     if (shmFd_ < 0) {
         return false;
     }
@@ -76,7 +80,7 @@ bool SharedMemoryBridge::initialize() {
         PAGE_READWRITE,
         0,
         SHARED_MEMORY_SIZE,
-        SHARED_MEMORY_NAME
+        shmName.c_str()
     );
 
     if (hMapFile_ == nullptr) {
@@ -102,6 +106,7 @@ bool SharedMemoryBridge::initialize() {
 
     return true;
 #else
+    (void)shmName;
     return false;
 #endif
 }

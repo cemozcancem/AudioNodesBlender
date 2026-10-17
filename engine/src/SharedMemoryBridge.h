@@ -19,8 +19,10 @@ public:
     SharedMemoryBridge();
     ~SharedMemoryBridge();
 
-    // Initialize shared memory
-    bool initialize();
+    // Initialize shared memory for the engine listening on `zmqPort`.
+    // The mapping name depends on the port (sharedMemoryNameForPort in
+    // SharedTypes.h). Message thread, once at startup.
+    bool initialize(int zmqPort = DEFAULT_ZMQ_PORT);
 
     // Cleanup shared memory
     void cleanup();
