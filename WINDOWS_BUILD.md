@@ -150,8 +150,10 @@ process before `main`).
 
 **Meters and spectrum stay flat but the engine says Running**
 Shared memory. The C++ side creates a `CreateFileMappingA` named
-`AudioNodesVisualization`; Python attaches to the same name. Both must be in
-the same Windows session — they will be if Blender launched the engine.
+`AudioNodesVisualization` (or `AudioNodesVisualization_<port>` if you changed
+the port in the add-on preferences from the default 5555); Python attaches to
+the same name. Both must be in the same Windows session — they will be if
+Blender launched the engine.
 
 ---
 

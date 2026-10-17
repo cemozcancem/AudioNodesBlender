@@ -1121,6 +1121,17 @@ All responses have a `status` field ("ok" or "error").
 
 ## Shared Memory Reference
 
+### Mapping Name
+
+The mapping is named per ZMQ port so two Blender instances on different ports don't read each other's meters:
+
+- Port 5555 (default): `AudioNodesVisualization` (`/tmp/AudioNodesVisualization` on macOS/Linux, a named mapping on Windows).
+- Any other port: `AudioNodesVisualization_<port>`, e.g. `/tmp/AudioNodesVisualization_5600`.
+
+The add-on reads the mapping for the port in its preferences and switches when the port changes. The rule must match in three places: `sharedMemoryNameForPort` in `engine/src/common/SharedTypes.h`, `shared_memory_name` in `blender_addon/shared_memory_reader.py` and `shm_name_for_port` in `tests/harness.py`.
+
+The file is deliberately not deleted when the engine exits, so readers survive an engine restart. Leftover ~51 KB files in `/tmp` for ports used earlier are harmless.
+
 ### Struct Layout (SharedTypes.h)
 
 ```cpp
