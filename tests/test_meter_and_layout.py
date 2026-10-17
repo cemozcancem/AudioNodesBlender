@@ -18,6 +18,7 @@ Usage:
 import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 ADDON = ROOT / "blender_addon"
@@ -226,7 +227,7 @@ def addon_namespace():
                     for t in n.targets))
             or (isinstance(n, ast.FunctionDef)
                 and n.name in ("shared_memory_name", "_get_shm_path"))]
-    ns = {"Optional": object, "_current_port": lambda: 5555}
+    ns = {"Optional": Optional, "_current_port": lambda: 5555}
     exec(compile(ast.Module(body=keep, type_ignores=[]), "reader", "exec"), ns)
     return ns
 
