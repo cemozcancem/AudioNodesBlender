@@ -6,6 +6,7 @@ transforms, light energy, shape keys, ...) can use audio in a driver
 expression:
 
     audio_tap("FFT Analyzer", "Lows#61f03ca0")   # one tap, by stable ref
+    audio_tap("FFT Analyzer", "Lows#61f03ca0", accumulated=True)  # its count
     audio_channel("peak_left")                   # any raw channel by name
 
 Refresh model: driver expressions have no RNA dependencies Blender can
@@ -55,7 +56,7 @@ def _taps():
     return _fft_taps_mod
 
 
-def audio_tap(node, tap=0, default=0.0):
+def audio_tap(node, tap=0, default=0.0, accumulated=False):
     """Live energy of one tap on an FFT Analyzer node.
 
     BOTH arguments are stable reference strings of the form "Name#id" - the
@@ -70,6 +71,11 @@ def audio_tap(node, tap=0, default=0.0):
     the next added tap reuses. Prefer the string forms.
 
     The value is mapped to the tap's Min/Max output range (0-1 by default).
+
+    accumulated=True reads the tap's Accumulate output instead (the running
+    count). It returns `default` while that tap's Accumulate is off. Keep
+    it a keyword argument: the positional (node, tap, default) form is
+    unchanged for existing drivers.
     """
     try:
         taps_mod = _taps()
@@ -81,8 +87,12 @@ def audio_tap(node, tap=0, default=0.0):
             return default  # deleted tap - never re-bind to its slot
         resolved = analyzer.taps[index]
         if resolved.tap_id:
-            return audio_channel(
-                f"{analyzer.engine_node_id}_tap_{resolved.tap_id}", default)
+            channel = f"{analyzer.engine_node_id}_tap_{resolved.tap_id}"
+            if accumulated:
+                if not getattr(resolved, "accumulate", False):
+                    return default
+                channel += taps_mod.ACC_CHANNEL_SUFFIX
+            return audio_channel(channel, default)
     except Exception:
         pass
     return default
@@ -187,6 +197,8 @@ class AUDIONODES_OT_copy_tap_driver(bpy.types.Operator):
     # tap_index, which are only fallbacks for callers predating stable refs.
     tap_ref: bpy.props.StringProperty(default="")
     node_ref: bpy.props.StringProperty(default="")
+    # Set when the tap has Accumulate on: copy the running count instead.
+    accumulated: bpy.props.BoolProperty(default=False)
 
     def execute(self, context):
         ref = self.tap_ref
@@ -194,9 +206,12 @@ class AUDIONODES_OT_copy_tap_driver(bpy.types.Operator):
             ref = self._lookup_ref()
         node = self.node_ref or self.node_name
         if ref:
-            expression = f'audio_tap("{node}", "{ref}")'
+            expression = f'audio_tap("{node}", "{ref}"'
         else:
-            expression = f'audio_tap("{node}", {self.tap_index})'
+            expression = f'audio_tap("{node}", {self.tap_index}'
+        if self.accumulated:
+            expression += ', accumulated=True'
+        expression += ')'
         context.window_manager.clipboard = expression
         self.report({'INFO'},
                     f"Copied: {expression} - right-click any property > "
