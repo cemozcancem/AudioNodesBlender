@@ -442,7 +442,16 @@ class AudioFFTAnalyzerNode(AudioNodeBase):
                 op.tap_index = self.active_tap_index
                 op.tap_ref = ref
                 op.node_ref = node_ref
-                op.accumulated = bool(tap.accumulate)
+                if tap.accumulate:
+                    # Level (as before) + the accumulated count
+                    op.paired = True
+                    op = actions.operator("audionodes.copy_tap_driver",
+                                          text="Σ", icon='COPYDOWN')
+                    op.node_name = self.name
+                    op.tap_index = self.active_tap_index
+                    op.tap_ref = ref
+                    op.node_ref = node_ref
+                    op.accumulated = True
                 op = actions.operator("audionodes.remove_tap",
                                       text="", icon='TRASH')
                 op.node_name = self.name

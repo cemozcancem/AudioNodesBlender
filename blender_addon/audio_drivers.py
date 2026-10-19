@@ -197,8 +197,22 @@ class AUDIONODES_OT_copy_tap_driver(bpy.types.Operator):
     # tap_index, which are only fallbacks for callers predating stable refs.
     tap_ref: bpy.props.StringProperty(default="")
     node_ref: bpy.props.StringProperty(default="")
-    # Set when the tap has Accumulate on: copy the running count instead.
-    accumulated: bpy.props.BoolProperty(default=False)
+    # True: copy the tap's accumulated count (its "· Σ" output) instead.
+    accumulated: bpy.props.BoolProperty(default=False,
+                                        options={'HIDDEN', 'SKIP_SAVE'})
+    # Set on the level button when the Σ button is shown next to it, so the
+    # two tooltips tell the buttons apart. Off: today's tooltip, unchanged.
+    paired: bpy.props.BoolProperty(default=False,
+                                   options={'HIDDEN', 'SKIP_SAVE'})
+
+    @classmethod
+    def description(cls, context, properties):
+        if properties.accumulated:
+            return ("Copy a driver expression for this tap's accumulated "
+                    "count (the Σ output)")
+        if properties.paired:
+            return "Copy a driver expression for this tap's level"
+        return ""   # empty: Blender shows the normal tooltip (docstring)
 
     def execute(self, context):
         ref = self.tap_ref
