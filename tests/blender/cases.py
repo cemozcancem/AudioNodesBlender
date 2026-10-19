@@ -1133,6 +1133,652 @@ def case_camera_cutter_record_bakes_camera():
 
 
 # ---------------------------------------------------------------------------
+# FFT tap Accumulate (#13)
+#
+# The engine is never needed: each case seeds the tap's published channel
+# '<engine_id>_tap_<tap_id>' by hand and runs the reader's per-tick passes
+# in the reader's own order (_tick_taps), with a fixed dt.
+# ---------------------------------------------------------------------------
+
+ACC_LABEL = " · Σ"        # "<Tap name> · Σ", pinned on purpose
+
+
+def _taps_mod():
+    from blender_addon.nodes.effects import fft_taps
+    return fft_taps
+
+
+def _acc_tree(name="AccTree", n_taps=1):
+    tree = _fresh_tree(name)
+    node = tree.nodes.new("AudioFFTAnalyzerNode")
+    taps = [node.add_tap(200.0 * (i + 1), name=f"T{i + 1}")
+            for i in range(n_taps)]
+    return tree, node, taps
+
+
+def _seed(name, value):
+    channels = bpy.context.scene.audio_nodes_data.channels
+    ch = channels.get(name)
+    if ch is None:
+        ch = channels.add()
+        ch.name = name
+    ch.value = value
+
+
+def _channel(name):
+    ch = bpy.context.scene.audio_nodes_data.channels.get(name)
+    return None if ch is None else ch.value
+
+
+def _seed_tap(node, tap, value):
+    _seed(_taps_mod().tap_channel_name(node, tap), value)
+
+
+def _acc_of(node, tap):
+    return _channel(_taps_mod().acc_channel_name(node, tap))
+
+
+def _tick_taps(n=1, dt=1.0 / 60.0):
+    """Reader tick after the shared-memory read, in _update_audio_data order."""
+    smr = _addon().shared_memory_reader
+    audio_data = bpy.context.scene.audio_nodes_data
+    for _ in range(n):
+        smr._update_tap_accumulators(audio_data, dt)
+        smr._update_math_nodes(audio_data)
+        if smr._has_control_nodes():
+            smr._update_control_nodes(audio_data, dt)
+            smr._update_math_nodes(audio_data)
+        smr._update_value_output_nodes(audio_data, {})
+    return audio_data
+
+
+def _tap_outputs(node):
+    return [(s.tap_id, s.tap_param, s.name) for s in node.outputs
+            if getattr(s, "tap_id", "")]
+
+
+def _close(a, b, tol=1e-4):
+    return a is not None and abs(a - b) <= tol
+
+
+def case_tap_accumulate_off_by_default_and_old_files():
+    """New taps and taps from older files have Accumulate off, nothing extra."""
+    fft_taps = _taps_mod()
+    addon = _addon()
+    tree, node, (tap,) = _acc_tree("AccOldFile")
+    assert_eq(tap.accumulate, False, "Accumulate must default to off")
+    assert_eq(round(tap.accumulate_gain, 6), 1.0, "Rate Gain default")
+    assert_eq(tap.accumulate_mode, 'NONE', "Mode default must be Unbounded")
+    assert_eq((tap.accumulate_low, tap.accumulate_high), (0.0, 1.0),
+              "Low/High defaults")
+    assert_eq(_tap_outputs(node), [(tap.tap_id, "", "T1")],
+              "a fresh tap has exactly one output socket")
+
+    _seed_tap(node, tap, 0.5)
+    _tick_taps(5)
+    channel = fft_taps.acc_channel_name(node, tap)
+    assert_true(_channel(channel) is None,
+                "a tap with Accumulate off must not publish an _acc channel")
+    assert_true(channel not in fft_taps._ACC_STATE,
+                "a tap with Accumulate off must not hold a running total")
+
+    # A file saved before Accumulate existed simply lacks these properties.
+    for prop in ("accumulate", "accumulate_gain", "accumulate_mode",
+                 "accumulate_low", "accumulate_high"):
+        tap.property_unset(prop)
+    vo = tree.nodes.new("AudioValueOutputNode")
+    tree.links.new(node.get_tap_socket(tap.tap_id), vo.inputs["Value"])
+    tree.use_fake_user = True
+    tap_id, node_name, vo_name = tap.tap_id, node.name, vo.name
+
+    with _detached_file_handlers(addon):
+        tmp = Path(tempfile.gettempdir()) / "audionodes_acc_oldfile.blend"
+        if tmp.exists():
+            tmp.unlink()
+        bpy.ops.wm.save_as_mainfile(filepath=str(tmp), copy=True)
+        bpy.ops.wm.open_mainfile(filepath=str(tmp))
+        tmp.unlink()
+
+    tree = bpy.data.node_groups.get("AccOldFile")
+    assert_true(tree is not None, "tree missing after reload")
+    node = tree.nodes[node_name]
+    tap = node.taps[0]
+    assert_eq(tap.accumulate, False, "old-file tap loaded with Accumulate on")
+    _tick_taps(1)
+    node.sync_tap_sockets()
+    assert_eq(_tap_outputs(node), [(tap_id, "", "T1")],
+              "old-file tap gained or lost output sockets")
+    link_from = tree.nodes[vo_name].inputs["Value"].links[0].from_socket
+    assert_eq((link_from.tap_id, link_from.tap_param), (tap_id, ""),
+              "old-file link from the tap output was disturbed")
+
+
+def case_tap_accumulate_toggle_adds_and_removes_socket():
+    fft_taps = _taps_mod()
+    tree, node, (a, b) = _acc_tree("AccToggle", n_taps=2)
+    plain_a = node.get_tap_socket(a.tap_id)
+    plain_a_id = plain_a.identifier
+
+    a.accumulate = True
+    assert_eq(_tap_outputs(node),
+              [(a.tap_id, "", "T1"),
+               (a.tap_id, fft_taps.ACC_PARAM, "T1" + ACC_LABEL),
+               (b.tap_id, "", "T2")],
+              "Σ output must sit right after its tap's normal output")
+    assert_eq(fft_taps.ACC_PARAM, "accumulated", "socket marker changed")
+    assert_eq(node.get_tap_socket(a.tap_id).identifier, plain_a_id,
+              "get_tap_socket must still return the plain output")
+    acc_a = node.get_tap_acc_socket(a.tap_id)
+    assert_true(acc_a is not None and acc_a.bl_idname == "ControlSocketType",
+                "Σ output must be a control socket")
+    assert_true(len({s.identifier for s in node.outputs}) == len(node.outputs),
+                "output socket identifiers must be unique")
+
+    b.accumulate = True
+    assert_eq([(t, p) for t, p, _n in _tap_outputs(node)],
+              [(a.tap_id, ""), (a.tap_id, "accumulated"),
+               (b.tap_id, ""), (b.tap_id, "accumulated")],
+              "two accumulating taps keep their sockets paired")
+
+    # The label follows a rename.
+    a.name = "Lows"
+    node.sync_tap_sockets()
+    assert_eq(node.get_tap_acc_socket(a.tap_id).name, "Lows" + ACC_LABEL,
+              "Σ label did not follow the tap rename")
+
+    # Links to Σ go when the toggle goes off; the plain link stays.
+    vo_acc = tree.nodes.new("AudioValueOutputNode")
+    vo_plain = tree.nodes.new("AudioValueOutputNode")
+    tree.links.new(node.get_tap_acc_socket(a.tap_id), vo_acc.inputs["Value"])
+    tree.links.new(node.get_tap_socket(a.tap_id), vo_plain.inputs["Value"])
+    _seed_tap(node, a, 0.5)
+    _tick_taps(3)
+    channel = fft_taps.acc_channel_name(node, a)
+    assert_true(channel in fft_taps._ACC_STATE and _channel(channel),
+                "Σ did not run while on")
+
+    a.accumulate = False
+    assert_true(node.get_tap_acc_socket(a.tap_id) is None,
+                "toggle off did not remove the Σ output")
+    assert_eq([(t, p) for t, p, _n in _tap_outputs(node)],
+              [(a.tap_id, ""), (b.tap_id, ""), (b.tap_id, "accumulated")],
+              "toggle off disturbed other sockets")
+    assert_true(not vo_acc.inputs["Value"].is_linked,
+                "the link to the removed Σ output survived")
+    assert_true(vo_plain.inputs["Value"].is_linked
+                and vo_plain.inputs["Value"].links[0].from_socket.identifier
+                == plain_a_id,
+                "toggle off broke the plain tap output's link")
+    assert_true(channel not in fft_taps._ACC_STATE,
+                "toggle off kept the running total")
+    assert_true(_channel(channel) is None, "toggle off kept the _acc channel")
+
+    # Back on: right place again, and a fresh total (no state carried over).
+    a.accumulate = True
+    outs = _tap_outputs(node)
+    assert_eq(outs[1][:2], (a.tap_id, "accumulated"),
+              "Σ output not back right after its tap")
+    _tick_taps(1)
+    assert_true(_close(_acc_of(node, a), 0.5 / 60.0),
+                f"re-enabled Σ did not restart from 0: {_acc_of(node, a)}")
+
+
+def case_tap_accumulate_integrates_tap_times_gain_dt():
+    from blender_addon.nodes.control import control_logic
+    fft_taps = _taps_mod()
+    tree, node, (tap,) = _acc_tree("AccIntegrate")
+    tap.accumulate = True
+    tap.accumulate_gain = 2.0
+    _seed_tap(node, tap, 0.5)
+    dt = 1.0 / 60.0
+    for i in range(30):
+        _tick_taps(1, dt)
+        want = 0.5 * 2.0 * dt * (i + 1)
+        got = _acc_of(node, tap)
+        assert_true(_close(got, want),
+                    f"tick {i + 1}: Σ = {got}, expected tap*gain*dt sum {want}")
+    assert_true(_close(_acc_of(node, tap), 0.5), "Σ after 0.5 s at rate 1")
+
+    # Uneven ticks integrate their real dt.
+    _tick_taps(1, 0.1)
+    assert_true(_close(_acc_of(node, tap), 0.6), "Σ ignored a longer dt")
+
+    # The running total is an AccumulatorLogic, kept at 64-bit in Python.
+    channel = fft_taps.acc_channel_name(node, tap)
+    logic = fft_taps._ACC_STATE.get(channel)
+    assert_true(isinstance(logic, control_logic.AccumulatorLogic),
+                f"tap state is not AccumulatorLogic: {type(logic)!r}")
+    assert_true(abs(logic.raw - 0.6) < 1e-6, f"raw total drifted: {logic.raw}")
+
+    # Silence holds; a muted analyzer or a disabled tap holds too.
+    _seed_tap(node, tap, 0.0)
+    _tick_taps(10)
+    held = _acc_of(node, tap)
+    assert_true(_close(held, 0.6), f"silence moved Σ: {held}")
+    _seed_tap(node, tap, 0.5)
+    node.mute = True
+    _tick_taps(10)
+    assert_true(_close(_acc_of(node, tap), held), "muted analyzer moved Σ")
+    node.mute = False
+    tap.enabled = False
+    _tick_taps(10)
+    assert_true(_close(_acc_of(node, tap), held), "disabled tap moved Σ")
+    tap.enabled = True
+    _tick_taps(6)
+    assert_true(_close(_acc_of(node, tap), held + 0.1),
+                "Σ did not resume after re-enabling the tap")
+
+    # Negative Rate Gain counts down.
+    tap.accumulate_gain = -1.0
+    _tick_taps(12)
+    assert_true(_close(_acc_of(node, tap), held),
+                f"negative gain: {_acc_of(node, tap)} vs {held}")
+
+
+def case_tap_accumulate_plain_output_unchanged():
+    """With Accumulate on, the tap's own output is exactly what it was."""
+    smr = _addon().shared_memory_reader
+    fft_taps = _taps_mod()
+    audio_data = bpy.context.scene.audio_nodes_data
+    tree, node, (a, b) = _acc_tree("AccPlain", n_taps=2)
+    a.out_min, a.out_max = 1.0, 3.0           # final output is mapped
+    a.gain = b.gain = 1.0
+    plain = node.get_tap_socket(a.tap_id)
+    plain_id = plain.identifier
+    vo = tree.nodes.new("AudioValueOutputNode")
+    tree.links.new(plain, vo.inputs["Value"])
+    math = tree.nodes.new("AudioMathNode")
+    math.operation = 'ADD'
+    math.input_b = 0.0
+    tree.links.new(plain, math.inputs["A"])
+
+    bins = tuple([0.4] * 1024)
+    data = {"fft_nodes": {}, "fft_left": bins, "fft_right": bins}
+
+    def tick(n):
+        for _ in range(n):
+            smr._update_fft_tap_outputs(audio_data, data)
+            _tick_taps(1)
+
+    def snapshot():
+        p = node.get_tap_socket(a.tap_id)
+        return (round(_channel(fft_taps.tap_channel_name(node, a)), 6),
+                round(_channel(fft_taps.tap_channel_name(node, b)), 6),
+                round(_channel(vo.get_channel_name()), 6),
+                round(_channel(math.get_channel_name()), 6),
+                round(smr._resolve_control_source_value(audio_data, node, p), 6),
+                p.identifier, p.name, p.tap_param)
+
+    tick(5)
+    before = snapshot()
+    assert_true(abs(before[0] - 1.8) < 1e-4,
+                f"seeded spectrum should map to 1 + 2*0.4, got {before[0]}")
+    a.accumulate = True
+    tick(5)
+    after = snapshot()
+    assert_eq(after, before, "Accumulate on changed the tap's normal output")
+    assert_true(vo.inputs["Value"].links[0].from_socket.identifier == plain_id,
+                "Accumulate on moved the plain tap link")
+    # ... and Σ integrates that final (mapped) output: 1.8 * 5 ticks * dt.
+    assert_true(_close(_acc_of(node, a), 1.8 * 5 / 60.0),
+                f"Σ did not integrate the final output: {_acc_of(node, a)}")
+
+
+def case_tap_accumulate_wrap_pingpong_clamp_bounds():
+    tree, node, (tap,) = _acc_tree("AccBounds")
+    tap.accumulate = True
+    tap.accumulate_mode = 'WRAP'
+    tap.accumulate_low, tap.accumulate_high = 0.25, 0.75
+    tap.accumulate_gain = 3.0
+    _seed_tap(node, tap, 1.0)                 # 3 units/s across a 0.5 span
+    values = []
+    for _ in range(120):
+        _tick_taps(1)
+        values.append(_acc_of(node, tap))
+    assert_true(all(0.25 - 1e-6 <= v <= 0.75 + 1e-6 for v in values),
+                f"Wrap left Low/High: min {min(values)}, max {max(values)}")
+    wraps = sum(1 for p, v in zip(values, values[1:]) if v < p)
+    assert_true(wraps >= 10, f"Wrap should have wrapped ~12 times, saw {wraps}")
+
+    tap.accumulate_mode = 'PINGPONG'
+    values = []
+    for _ in range(120):
+        _tick_taps(1)
+        values.append(_acc_of(node, tap))
+    assert_true(all(0.25 - 1e-6 <= v <= 0.75 + 1e-6 for v in values),
+                f"Ping-Pong left Low/High: {min(values)}..{max(values)}")
+    ups = sum(1 for p, v in zip(values, values[1:]) if v > p)
+    downs = sum(1 for p, v in zip(values, values[1:]) if v < p)
+    assert_true(ups > 10 and downs > 10, f"Ping-Pong did not bounce ({ups}/{downs})")
+
+    tap.accumulate_mode = 'CLAMP'
+    _tick_taps(60)
+    assert_true(_close(_acc_of(node, tap), 0.75), "Clamp did not stop at High")
+    tap.accumulate_gain = -3.0
+    _tick_taps(60)
+    assert_true(_close(_acc_of(node, tap), 0.25), "Clamp did not stop at Low")
+
+
+def case_tap_accumulate_reset():
+    fft_taps = _taps_mod()
+    tree, node, (a, b) = _acc_tree("AccReset", n_taps=2)
+    for t in (a, b):
+        t.accumulate = True
+        _seed_tap(node, t, 0.5)
+    _tick_taps(30)
+    assert_true(_close(_acc_of(node, a), 0.25), "setup: Σ did not run")
+    other = _acc_of(node, b)
+
+    res = bpy.ops.audionodes.reset_tap_accumulator(node_name=node.name,
+                                                    tap_id=a.tap_id)
+    assert_eq(res, {'FINISHED'}, "Reset operator did not run")
+    assert_eq(_acc_of(node, a), 0.0, "Unbounded Reset must publish 0 at once")
+    assert_eq(_acc_of(node, b), other, "Reset touched another tap")
+    _tick_taps(1)
+    assert_true(_close(_acc_of(node, a), 0.5 / 60.0),
+                f"Reset only changed the channel, not the total: {_acc_of(node, a)}")
+
+    a.accumulate_mode = 'WRAP'
+    a.accumulate_low, a.accumulate_high = 0.3, 0.9
+    _tick_taps(20)
+    bpy.ops.audionodes.reset_tap_accumulator(node_name=node.name,
+                                             tap_id=a.tap_id)
+    assert_true(_close(_acc_of(node, a), 0.3), "bounded Reset must go to Low")
+    logic = fft_taps._ACC_STATE[fft_taps.acc_channel_name(node, a)]
+    assert_true(abs(logic.raw - 0.3) < 1e-6, f"total not reset: {logic.raw}")
+
+    b.accumulate = False
+    res = bpy.ops.audionodes.reset_tap_accumulator(node_name=node.name,
+                                                    tap_id=b.tap_id)
+    assert_eq(res, {'CANCELLED'}, "Reset on a tap without Accumulate")
+    assert_true(_acc_of(node, b) is None, "Reset recreated a removed channel")
+
+
+def case_tap_accumulate_remove_tap_clears_state():
+    fft_taps = _taps_mod()
+    tree, node, (a, b, c) = _acc_tree("AccRemove", n_taps=3)
+    for t, v in ((a, 0.5), (b, 0.25), (c, 1.0)):
+        t.accumulate = True
+        _seed_tap(node, t, v)
+    _tick_taps(30)
+    got = [_acc_of(node, t) for t in (a, b, c)]
+    for v, rate in zip(got, (0.5, 0.25, 1.0)):
+        assert_true(_close(v, rate * 0.5), f"taps leaked into each other: {got}")
+
+    ch_a = fft_taps.acc_channel_name(node, a)
+    b_id, c_id = b.tap_id, c.tap_id
+    node.remove_tap(0)        # 'a', 'b', 'c' RNA refs are stale from here
+    assert_true(ch_a not in fft_taps._ACC_STATE, "removed tap kept its total")
+    assert_true(_channel(ch_a) is None, "removed tap kept its _acc channel")
+    assert_eq([(t, p) for t, p, _n in _tap_outputs(node)],
+              [(b_id, ""), (b_id, "accumulated"),
+               (c_id, ""), (c_id, "accumulated")],
+              "remaining taps lost their Σ outputs")
+    b = node.taps[0]
+    c = node.taps[1]
+    assert_true(_close(_acc_of(node, b), 0.125) and _close(_acc_of(node, c), 0.5),
+                "removing a tap disturbed the others")
+
+    # A new tap does not inherit the removed tap's total.
+    d = node.add_tap(3000.0, name="D")
+    d.accumulate = True
+    _tick_taps(1)
+    assert_eq(_acc_of(node, d), 0.0, "new tap inherited a total")
+
+    # Deleting the analyzer drops every total it owned.
+    prefix = node.engine_node_id + "_tap_"
+    tree.nodes.remove(node)
+    _tick_taps(1)
+    left = [k for k in fft_taps._ACC_STATE if k.startswith(prefix)]
+    assert_eq(left, [], "deleted analyzer left running totals behind")
+
+
+def case_tap_accumulate_value_output_reads_acc_channel():
+    """Value Output fed by Σ reads '_acc' and lands on Geometry Nodes."""
+    smr = _addon().shared_memory_reader
+    fft_taps = _taps_mod()
+    tree, node, (tap,) = _acc_tree("AccVO")
+    tap.accumulate = True
+    tap.accumulate_gain = 4.0
+    _seed_tap(node, tap, 0.25)                # rate 1 unit/s
+
+    group = bpy.data.node_groups.new("AccGN", "GeometryNodeTree")
+    group.interface.new_socket("Geometry", in_out='INPUT',
+                               socket_type='NodeSocketGeometry')
+    group.interface.new_socket("Geometry", in_out='OUTPUT',
+                               socket_type='NodeSocketGeometry')
+    spin = group.interface.new_socket("Spin", in_out='INPUT',
+                                      socket_type='NodeSocketFloat')
+    mesh = bpy.data.meshes.new("AccGNMesh")
+    obj = bpy.data.objects.new("AccGN", mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    modifier = obj.modifiers.new("AccGN", 'NODES')
+    modifier.node_group = group
+
+    def readback():
+        inputs = getattr(getattr(modifier, "properties", None), "inputs", None)
+        if inputs is not None:                       # Blender 5.x
+            return getattr(inputs, spin.identifier).value
+        return modifier[spin.identifier]             # Blender 4.x
+
+    try:
+        acc = node.get_tap_acc_socket(tap.tap_id)
+        vo = tree.nodes.new("AudioValueOutputNode")
+        vo.smoothing = 0.0
+        vo.target_object = obj
+        vo.property_name = "Spin"
+        tree.links.new(acc, vo.inputs["Value"])
+
+        assert_eq(node.get_output_channel_name(acc.name),
+                  fft_taps.acc_channel_name(node, tap),
+                  "get_output_channel_name maps Σ to the wrong channel")
+        assert_eq(node.get_output_channel_name(
+                      node.get_tap_socket(tap.tap_id).name),
+                  fft_taps.tap_channel_name(node, tap),
+                  "get_output_channel_name broke for the plain output")
+
+        _tick_taps(30)
+        first = _acc_of(node, tap)
+        assert_true(_close(first, 0.5), f"Σ after 0.5 s: {first}")
+        assert_true(_close(_channel(vo.get_channel_name()), first),
+                    f"Value Output read {_channel(vo.get_channel_name())}, "
+                    f"not the Σ value {first} (plain tap is 0.25)")
+        assert_true(_close(readback(), first),
+                    f"Geometry Nodes input is {readback()}, expected {first}")
+
+        _tick_taps(30)
+        assert_true(_close(readback(), 1.0) and readback() > first,
+                    f"Geometry Nodes input did not keep climbing: {readback()}")
+
+        # "Drives:" names which of the tap's outputs is used.
+        fft_taps._tap_targets_stamp = 0.0
+        labels = fft_taps.get_tap_targets(node).get(0, [])
+        assert_true(any(l.endswith(ACC_LABEL) and "AccGN" in l for l in labels),
+                    f"tap targets do not mark the Σ link: {labels}")
+    finally:
+        obj.modifiers.remove(modifier)
+        bpy.data.objects.remove(obj)
+        bpy.data.meshes.remove(mesh)
+        bpy.data.node_groups.remove(group)
+
+
+def case_tap_accumulate_feeds_math_and_control_nodes_same_tick():
+    import inspect
+    smr = _addon().shared_memory_reader
+    audio_data = bpy.context.scene.audio_nodes_data
+    tree, node, (tap,) = _acc_tree("AccMath")
+    tap.accumulate = True
+    _seed_tap(node, tap, 0.5)
+    acc = node.get_tap_acc_socket(tap.tap_id)
+    plain = node.get_tap_socket(tap.tap_id)
+
+    math = tree.nodes.new("AudioMathNode")
+    math.operation = 'ADD'
+    math.input_b = 0.0
+    tree.links.new(acc, math.inputs["A"])
+    integ = tree.nodes.new("AudioAccumulatorNode")
+    integ.mode = 'NONE'
+    tree.links.new(acc, integ.inputs["Rate"])
+
+    dt = 1.0 / 60.0
+    expected_integ = 0.0
+    for i in range(10):
+        _tick_taps(1, dt)
+        sigma = _acc_of(node, tap)
+        assert_true(_close(sigma, 0.5 * dt * (i + 1)), f"Σ tick {i + 1}: {sigma}")
+        assert_eq(_channel(math.get_channel_name()), sigma,
+                  f"tick {i + 1}: Math fed by Σ lags a tick")
+        expected_integ += sigma * dt
+        got = _chan(integ, "Value")
+        assert_true(_close(got, expected_integ, 1e-6),
+                    f"tick {i + 1}: Accumulator fed by Σ got {got}, "
+                    f"expected this tick's Σ integrated ({expected_integ})")
+
+    assert_eq(smr._resolve_control_source_value(audio_data, node, acc),
+              _acc_of(node, tap), "control links from Σ resolve wrongly")
+    assert_true(_close(smr._resolve_control_source_value(audio_data, node, plain),
+                       0.5), "control links from the plain tap changed")
+
+    # The real timer runs the tap pass between tap publishing and Math.
+    src = inspect.getsource(smr._update_audio_data)
+    i_taps = src.find("_update_fft_tap_outputs(")
+    i_acc = src.find("_update_tap_accumulators(")
+    i_math = src.find("_update_math_nodes(")
+    i_ctrl = src.find("_update_control_nodes(")
+    i_vo = src.find("_update_value_output_nodes(")
+    assert_true(0 <= i_taps < i_acc < i_math < i_ctrl and i_acc < i_vo,
+                f"reader order changed: taps {i_taps}, acc {i_acc}, "
+                f"math {i_math}, control {i_ctrl}, value out {i_vo}")
+
+
+def case_tap_accumulate_audio_tap_driver():
+    from types import SimpleNamespace
+    fft_taps = _taps_mod()
+    audio_drivers = _addon().audio_drivers
+    tree, node, (tap,) = _acc_tree("AccDriver")
+    ref = fft_taps.tap_ref(tap)
+    _seed_tap(node, tap, 0.5)
+
+    # Accumulate off: every existing call form unchanged.
+    assert_true(_close(audio_drivers.audio_tap(node.name, ref), 0.5),
+                "audio_tap(node, ref) changed")
+    assert_true(_close(audio_drivers.audio_tap(node.name, ref, -1.0), 0.5),
+                "audio_tap(node, ref, default) changed")
+    assert_true(_close(audio_drivers.audio_tap(node.name, 0), 0.5),
+                "audio_tap(node, index) changed")
+    assert_true(_close(audio_drivers.audio_tap(node.name), 0.5),
+                "audio_tap(node) changed")
+    assert_eq(audio_drivers.audio_tap(node.name, ref, -2.0, accumulated=True),
+              -2.0, "accumulated=True with Accumulate off must give default")
+    assert_eq(audio_drivers.audio_tap("NoSuchNode", ref, -3.0, accumulated=True),
+              -3.0, "unknown node must give default")
+
+    tap.accumulate = True
+    _tick_taps(30)
+    sigma = _acc_of(node, tap)
+    assert_true(_close(sigma, 0.25), f"setup: Σ {sigma}")
+    assert_eq(audio_drivers.audio_tap(node.name, ref, accumulated=True), sigma,
+              "audio_tap(..., accumulated=True) does not read Σ")
+    assert_eq(audio_drivers.audio_tap(node.name, ref, 0.0, True), sigma,
+              "positional accumulated argument does not read Σ")
+    assert_eq(audio_drivers.audio_tap(node.name, 0, accumulated=True), sigma,
+              "index ref + accumulated=True")
+    assert_true(_close(audio_drivers.audio_tap(node.name, ref), 0.5),
+                "plain audio_tap changed with Accumulate on")
+
+    # A real scripted driver on an object reads it.
+    obj = bpy.data.objects.new("AccDriverProbe", None)
+    bpy.context.scene.collection.objects.link(obj)
+    try:
+        fc_acc = obj.driver_add("location", 0)
+        fc_acc.driver.type = 'SCRIPTED'
+        fc_acc.driver.expression = (
+            f'audio_tap("{node.name}", "{ref}", accumulated=True)')
+        fc_lvl = obj.driver_add("location", 1)
+        fc_lvl.driver.type = 'SCRIPTED'
+        fc_lvl.driver.expression = f'audio_tap("{node.name}", "{ref}")'
+        bpy.context.view_layer.update()
+        bpy.context.scene.frame_set(bpy.context.scene.frame_current)
+        assert_true(_close(obj.location.x, sigma),
+                    f"driver with accumulated=True read {obj.location.x}")
+        assert_true(_close(obj.location.y, 0.5),
+                    f"plain driver read {obj.location.y}")
+
+        fft_taps._tap_targets_stamp = 0.0
+        labels = fft_taps.get_tap_targets(node).get(0, [])
+        marked = [l for l in labels if l.endswith(ACC_LABEL)]
+        assert_eq(len(marked), 1, f"Σ driver not marked once in {labels}")
+        assert_eq(len(labels), 2, f"both drivers should be listed: {labels}")
+    finally:
+        bpy.data.objects.remove(obj)
+
+    # Copy Driver Expression: plain text unchanged, Σ adds accumulated=True.
+    op_cls = audio_drivers.AUDIONODES_OT_copy_tap_driver
+
+    def copied(accumulated, paired=False):
+        ctx = SimpleNamespace(window_manager=SimpleNamespace(clipboard=""))
+        fake = SimpleNamespace(tap_ref=ref, node_ref="", node_name=node.name,
+                               tap_index=0, accumulated=accumulated,
+                               paired=paired, report=lambda *_a: None,
+                               _lookup_ref=lambda: ref)
+        op_cls.execute(fake, ctx)
+        return ctx.window_manager.clipboard
+
+    assert_eq(copied(False), f'audio_tap("{node.name}", "{ref}")',
+              "plain copied expression changed")
+    assert_eq(copied(False, paired=True), f'audio_tap("{node.name}", "{ref}")',
+              "paired level button must copy the plain expression")
+    assert_eq(copied(True), f'audio_tap("{node.name}", "{ref}", accumulated=True)',
+              "Σ copy button expression")
+    desc = op_cls.description
+    assert_eq(desc(None, SimpleNamespace(accumulated=False, paired=False)), "",
+              "unpaired button must keep Blender's default tooltip")
+    assert_true(desc(None, SimpleNamespace(accumulated=True, paired=False)),
+                "Σ button needs its own tooltip")
+    assert_true(desc(None, SimpleNamespace(accumulated=False, paired=True)),
+                "paired level button needs its own tooltip")
+
+
+def case_prune_keeps_live_tap_acc_channels():
+    """prune_stale_channels must not delete a live tap's '_acc' channel.
+
+    The id regex is greedy: with an all-letter engine id and tap id, it
+    reads '<id>_tap_<tap_id>' as the node id, finds no such node, and used
+    to delete the channel.
+    """
+    smr = _addon().shared_memory_reader
+    tree, node, (tap,) = _acc_tree("AccPrune")
+    node.engine_node_id = "fft_analyzer_abcdefab"
+    tap.tap_id = "fedcbaee"
+    node.sync_tap_sockets()
+    live_plain = "fft_analyzer_abcdefab_tap_fedcbaee"
+    live_acc = live_plain + "_acc"
+    dead = ("fft_analyzer_00000000_tap_fedcbaee_acc",
+            "fft_analyzer_dddddddd_tap_eeeeeeee_acc",
+            "fft_analyzer_dddddddd_tap_eeeeeeee")
+    for name in (live_plain, live_acc) + dead:
+        _seed(name, 0.5)
+
+    try:
+        smr.prune_stale_channels()
+        assert_true(_channel(live_plain) is not None, "pruned a live tap channel")
+        assert_true(_channel(live_acc) is not None,
+                    "pruned a live tap's _acc channel")
+        for name in dead:
+            assert_true(_channel(name) is None, f"kept dead channel {name}")
+
+        # Same through the real feature path.
+        tap.accumulate = True
+        _seed(live_plain, 0.5)
+        _tick_taps(3)
+        smr.prune_stale_channels()
+        assert_true(_close(_channel(live_acc), 0.5 * 3 / 60.0),
+                    f"live Σ channel lost to prune: {_channel(live_acc)}")
+    finally:
+        tree.nodes.remove(node)
+
+
+# ---------------------------------------------------------------------------
 # Discovery
 # ---------------------------------------------------------------------------
 
