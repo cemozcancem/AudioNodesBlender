@@ -58,6 +58,19 @@ Play some music: the light now pulses with the kick. To make it a sharp flash th
 
 > **Tip:** To drive a Geometry Nodes setup, click the **Value Output** button instead. Then pick your object and type the name of the Geometry Nodes input the value should go to.
 
+### Make a tap keep moving (Accumulate)
+
+A tap's normal output follows the level: it jumps up and down with the music. If you want something that keeps moving forward instead, such as a spinning object that spins faster when the bass is loud, turn on **Accumulate** for that tap.
+
+- A second output appears, named after the tap with **Σ** (for example "Kick · Σ"). It counts up over time, faster when that band is louder. The normal output stays as it was.
+- **Rate Gain** sets how fast it counts. **Mode** sets what happens at the ends: **Unbounded** keeps counting, **Wrap** loops between **Low** and **High**, **Ping-Pong** bounces between them, **Clamp** stops at them. **Reset** sends the count back to Low (or to 0 when Unbounded).
+- Use the Σ output like any other: wire it to **Value Output**, **Math** or other nodes. For a driver, click the copy button marked **Σ** (the normal copy button still copies the level). The **Drives** list shows "· Σ" for things driven by the count.
+- Turning Accumulate off removes the Σ output and anything connected to it.
+
+> **Tip:** Use **Wrap** for looping motion such as rotation. Unbounded counts slowly lose precision after very long runs.
+
+The count isn't saved in your .blend file. It starts again from Low (or 0) when you open the file, and it pauses while the analyzer is muted or the tap is disabled. This switch is a shortcut for connecting a tap to an **Accumulator** node. Use the Accumulator node when the input is something other than a tap.
+
 ## All nodes
 
 Press **Shift+A** in the Audio Nodes editor to add any of these.
