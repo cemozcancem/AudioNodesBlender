@@ -210,6 +210,136 @@ for name, should_match in (("fft_analyzer_7ac41f02_tap_61f03ca0", True),
                            ("midi_last_note", False)):
     check(f"channel regex {name}", bool(chan_re.match(name)), should_match)
 
+# ======================================================================
+# Issue #6: the add-on (and the test harness) must wait longer for a device
+# switch than the engine does, or a slow switch that works is reported as
+# an error. Read the limits from the sources so they can't drift apart.
+print("\n[8] device-switch timeouts (issue #6)")
+import ast, json
+REPO = ROOT.parent
+MIN_MARGIN_S = 3   # "a few seconds" on top of the engine's limit
+
+cpp_src = (REPO/"engine/src/AudioEngine.cpp").read_text()
+engine_waits = [int(s) for s in re.findall(
+    r"wait_for\(\s*std::chrono::seconds\(\s*(\d+)\s*\)\s*\)", cpp_src)]
+check("engine has exactly one device-switch wait", len(engine_waits), 1)
+engine_limit_s = engine_waits[0] if engine_waits else None
+
+cc_tree = ast.parse((ROOT/"command_client.py").read_text())
+cc_consts = {}
+for stmt in cc_tree.body:
+    if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)):
+        try:
+            cc_consts[stmt.targets[0].id] = eval(
+                compile(ast.Expression(stmt.value), "cc", "eval"),
+                {"__builtins__": {}}, dict(cc_consts))
+        except Exception:
+            pass   # non-constant module globals (sockets, locks, ...)
+check("ENGINE_DEVICE_SWITCH_LIMIT_S matches AudioEngine.cpp",
+      cc_consts.get("ENGINE_DEVICE_SWITCH_LIMIT_S"), engine_limit_s)
+
+slow_fn = next((n for n in cc_tree.body if isinstance(n, ast.FunctionDef)
+                and n.name == "send_slow_command"), None)
+slow_default_ms = None
+if slow_fn is not None:
+    names = [a.arg for a in slow_fn.args.args]
+    defaults = dict(zip(names[-len(slow_fn.args.defaults):], slow_fn.args.defaults)) \
+        if slow_fn.args.defaults else {}
+    if "timeout_ms" in defaults:
+        slow_default_ms = eval(compile(ast.Expression(defaults["timeout_ms"]), "cc", "eval"),
+                               {"__builtins__": {}}, dict(cc_consts))
+need_ms = ((engine_limit_s or 0) + MIN_MARGIN_S) * 1000
+check(f"send_slow_command default ({slow_default_ms} ms) >= engine limit + "
+      f"{MIN_MARGIN_S} s ({need_ms} ms)",
+      slow_default_ms is not None and slow_default_ms >= need_ms, True)
+
+harness_src = (REPO/"tests/harness.py").read_text()
+hm = re.search(r"RCVTIMEO,\s*(\d+)\s+if\s+slow\b", harness_src)
+harness_slow_ms = int(hm.group(1)) if hm else None
+check(f"harness slow-command timeout ({harness_slow_ms} ms) >= engine limit + "
+      f"{MIN_MARGIN_S} s ({need_ms} ms)",
+      harness_slow_ms is not None and harness_slow_ms >= need_ms, True)
+
+# Behaviour: drive set_device() through a fake zmq whose "engine" answers
+# after a simulated delay. A socket whose RCVTIMEO is shorter than the delay
+# raises Again, exactly like pyzmq. No real waiting happens.
+class _Again(Exception):
+    pass
+
+class _FakeEngine:
+    def __init__(self, reply, delay_ms, devices):
+        self.reply, self.delay_ms, self.devices = reply, delay_ms, devices
+
+class _FakeSocket:
+    def __init__(self, ctx):
+        self.ctx, self.opts, self.cmd = ctx, {}, None
+    def setsockopt(self, k, v): self.opts[k] = v
+    def connect(self, addr): pass
+    def send_string(self, s): self.cmd = json.loads(s)
+    def recv_string(self):
+        eng = self.ctx.engine
+        if self.cmd["type"] == "set_device":
+            if self.opts.get(_fzmq.RCVTIMEO, 0) < eng.delay_ms:
+                raise _Again()
+            return json.dumps(eng.reply)
+        if self.cmd["type"] == "get_devices":
+            return json.dumps({"status": "ok", "data": eng.devices})
+        return json.dumps({"status": "ok"})
+    def close(self, linger=0): pass
+
+class _FakeContext:
+    engine = None
+    def __init__(self): pass
+    def socket(self, kind): return _FakeSocket(self)
+    def term(self): pass
+
+_fzmq = types.ModuleType("zmq")
+_fzmq.REQ, _fzmq.RCVTIMEO, _fzmq.SNDTIMEO, _fzmq.LINGER = 3, 27, 28, 17
+_fzmq.Context = _FakeContext
+_fzmq.error = types.SimpleNamespace(Again=_Again)
+
+_saved = {k: sys.modules.get(k) for k in ("zmq", "an.command_client", "cc")}
+sys.modules["zmq"] = _fzmq
+try:
+    cc = load("cc", "command_client.py")
+    old_devs = {"current_input": "MacBook Pro Microphone",
+                "current_output": "MacBook Pro Speakers"}
+    new_devs = dict(old_devs, current_output="USB Interface")
+
+    # A switch that takes 12 s and works: success. get_devices() still shows
+    # the old device, so only the real reply can make this pass.
+    _FakeContext.engine = _FakeEngine(
+        {"status": "ok", "message": "", "data": new_devs}, 12000, old_devs)
+    r = cc.set_device("output", "USB Interface")
+    check("12 s switch reported as success", (r["ok"], r["timed_out"]), (True, False))
+    check("12 s switch returns engine's devices", r["data"].get("current_output"),
+          "USB Interface")
+
+    # Right at the engine's own limit (+1 s for the reply): still success.
+    _FakeContext.engine = _FakeEngine(
+        {"status": "ok", "message": "", "data": new_devs},
+        ((engine_limit_s or 15) + 1) * 1000, old_devs)
+    r = cc.set_device("output", "USB Interface")
+    check("switch at engine limit reported as success", r["ok"], True)
+
+    # A real failure: the engine answers with an error. Clear message.
+    _FakeContext.engine = _FakeEngine(
+        {"status": "error", "message": "Could not open USB Interface"}, 1000, old_devs)
+    r = cc.set_device("output", "USB Interface")
+    check("engine error reported as failure", (r["ok"], r["timed_out"]), (False, False))
+    check("engine error keeps its message", r["message"], "Could not open USB Interface")
+
+    # Engine never answers and the device did not change: failure, with text.
+    _FakeContext.engine = _FakeEngine({"status": "ok"}, 10**9, old_devs)
+    r = cc.set_device("output", "USB Interface")
+    check("no reply + unchanged device -> failure", (r["ok"], r["timed_out"]), (False, True))
+    check("no reply has a message", bool(r["message"]), True)
+finally:
+    for k, v in _saved.items():
+        if v is None: sys.modules.pop(k, None)
+        else: sys.modules[k] = v
+
 print("\n" + "="*60)
 print("FAILURES:", len(FAILS))
 for f in FAILS: print("  -", f)
