@@ -8,13 +8,17 @@ Run one:
     python3.11 -m pytest test_engine.py::test_ping -v
 """
 
+import contextlib
 import math
+import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
 
 import pytest
-from harness import Engine
+from harness import Engine, shm_path_for_port
 
 # ---------------------------------------------------------------------------
 # Shared fixture — engine starts once, all tests share it
@@ -1748,3 +1752,88 @@ def test_engine_responds_while_audio_device_opens(monkeypatch):
             time.sleep(0.2)
         assert resp and resp["status"] == "ok", \
             "get_devices never succeeded after the device opened"
+
+
+# ---------------------------------------------------------------------------
+# Two engines side by side (issue #5)
+# ---------------------------------------------------------------------------
+
+def _engine_running_on(port: int) -> bool:
+    """Is any engine process bound to `port`? (scoped by --zmq-port)"""
+    return subprocess.run(
+        ["pgrep", "-f", "--", f"--zmq-port {port}( |$)"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    ).returncode == 0
+
+
+@pytest.mark.needs_audio
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="uses /tmp mapping paths and pgrep")
+def test_two_engines_publish_to_their_own_shared_memory():
+    """Two Blenders, each with its own engine on its own port, must each see
+    their own meters. Both engines used to write the one shared file, so
+    whichever wrote last won and both Blenders showed the same data.
+
+    Each engine runs a sequencer at a different tempo; each reader must see
+    only its own engine's tempo, in its own per-port file.
+    """
+    bpm_for = {5621: 97.0, 5622: 143.0}
+
+    for port in bpm_for:
+        if _engine_running_on(port):
+            pytest.fail(f"another engine already runs on port {port}")
+        # The engine never unlinks its file (readers survive restarts), so
+        # drop a stale one from an earlier run: otherwise an engine that
+        # doesn't write it could still pass on yesterday's data.
+        path = shm_path_for_port(port)
+        if os.path.exists(path):
+            os.unlink(path)
+
+    with contextlib.ExitStack() as stack:
+        engines = {port: stack.enter_context(Engine(port=port))
+                   for port in bpm_for}
+
+        paths = {port: e.shm_path for port, e in engines.items()}
+        assert len(set(paths.values())) == 2, f"engines share a file: {paths}"
+        for port, path in paths.items():
+            assert path == f"/tmp/AudioNodesVisualization_{port}"
+
+        for port, e in engines.items():
+            assert e.create_node("seq_iso", "sequencer")
+            assert e.set_param("seq_iso", "bpm", bpm_for[port])
+
+        # Poll until each reader shows its own engine's tempo.
+        def bpm_seen(e):
+            state = e.read_sequencer()
+            return None if state is None else state["bpm"]
+
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
+            seen = {port: bpm_seen(e) for port, e in engines.items()}
+            if all(seen[p] == pytest.approx(bpm_for[p]) for p in bpm_for):
+                break
+            time.sleep(0.05)
+        assert all(seen[p] == pytest.approx(bpm_for[p]) for p in bpm_for), (
+            f"readers never saw their own engine's tempo: saw {seen}, "
+            f"expected {bpm_for}"
+        )
+
+        # Each file is live: written by its own running audio callback.
+        for port, e in engines.items():
+            assert e.wait_for_audio(timeout=5.0), \
+                f"{paths[port]} is not being updated by the engine on {port}"
+
+        # And stays its own for a while: the other engine, writing every
+        # ~12 ms, never shows up in this reader.
+        end = time.time() + 1.0
+        while time.time() < end:
+            for port, e in engines.items():
+                bpm = bpm_seen(e)
+                assert bpm == pytest.approx(bpm_for[port]), (
+                    f"reader for port {port} saw tempo {bpm} "
+                    f"(expected {bpm_for[port]}): another engine's data"
+                )
+            time.sleep(0.02)
+
+        for e in engines.values():
+            e.delete_node("seq_iso")

@@ -95,20 +95,55 @@ _engine_sample_rate = float(SAMPLE_RATE)
 # Global shared memory handle
 _shm = None
 _mmap = None
+# Path/name the open mapping belongs to. When the port in the preferences
+# changes, the cached mapping is for the old engine and gets reopened.
+_mapped_path = None
 
 # Fixed frequency bands were removed in 4.2: user-picked frequency taps
 # (see nodes/effects/fft_taps.py and _update_fft_tap_outputs) replace them.
 
 
-def _get_shm_path():
-    """Get the shared memory path for the current platform."""
+DEFAULT_ZMQ_PORT = 5555
+
+
+def shared_memory_name(port: int) -> str:
+    """Name of the visualization mapping published by the engine on `port`.
+
+    Each engine writes its own mapping, so two Blenders (each with its own
+    engine on its own port) never read each other's meters. The default
+    port keeps the old unsuffixed name so nothing changes for most users.
+
+    The SAME rule lives in engine/src/common/SharedTypes.h
+    (sharedMemoryNameForPort) and tests/harness.py - keep all three in step.
+    Never fall back to the unsuffixed name for another port: that is
+    another instance's data.
+    """
+    port = int(port)
+    if port == DEFAULT_ZMQ_PORT:
+        return SHARED_MEMORY_NAME
+    return f"{SHARED_MEMORY_NAME}_{port}"
+
+
+def _current_port() -> int:
+    """The ZMQ port from the add-on preferences (5555 if unavailable)."""
+    try:
+        from . import engine_manager
+        return int(engine_manager.get_zmq_port())
+    except Exception:
+        return DEFAULT_ZMQ_PORT
+
+
+def _get_shm_path(port: Optional[int] = None):
+    """Shared memory path (file on macOS/Linux, mapping name on Windows)
+    for `port`, or for the port set in the preferences when omitted."""
     import sys
+    name = shared_memory_name(_current_port() if port is None else port)
     if sys.platform == "darwin" or sys.platform.startswith("linux"):
         # macOS and Linux: a file-backed mapping in /tmp
-        return f"/tmp/{SHARED_MEMORY_NAME}"
+        return f"/tmp/{name}"
     elif sys.platform == "win32":
         # Windows uses named shared memory directly
-        return SHARED_MEMORY_NAME
+        return name
     return None
 
 
@@ -139,19 +174,44 @@ def _windows_mapping_exists(name: str) -> bool:
         return True
 
 
+def published_size() -> Optional[int]:
+    """Size in bytes of the mapping for the current port, or None if the
+    engine has not published it. A leftover file from an engine that has
+    exited also counts, so this is not proof an engine is running."""
+    import sys
+    shm_path = _get_shm_path()
+    if shm_path is None:
+        return None
+    try:
+        if sys.platform == "win32":
+            # Mappings have no size to query; report the layout we read.
+            return _mapped_size if _windows_mapping_exists(shm_path) else None
+        if os.path.exists(shm_path):
+            return os.path.getsize(shm_path)
+    except Exception:
+        pass
+    return None
+
+
 def _open_shared_memory():
     """Open the shared memory region."""
-    global _shm, _mmap, _mapped_size
+    global _shm, _mmap, _mapped_size, _mapped_path
     
+    shm_path = _get_shm_path()
     if _mmap is not None:
-        return True
+        if shm_path == _mapped_path:
+            return True
+        # The port changed: stop reading the old engine's mapping.
+        _close_shared_memory()
+    
+    if shm_path is None:
+        return False
     
     import sys
     
     try:
         if sys.platform == "darwin" or sys.platform.startswith("linux"):
             # macOS and Linux: open the file-backed mapping in /tmp
-            shm_path = _get_shm_path()
             if not os.path.exists(shm_path):
                 return False
             
@@ -168,6 +228,7 @@ def _open_shared_memory():
             _shm = open(shm_path, "r+b")
             _mmap = mmap.mmap(_shm.fileno(), size)
             _mapped_size = size
+            _mapped_path = shm_path
             return True
             
         elif sys.platform == "win32":
@@ -178,15 +239,16 @@ def _open_shared_memory():
             # and then read zeros forever - meters flat, taps silent, no
             # error anywhere. The macOS branch guards with os.path.exists;
             # this is the equivalent probe.
-            if not _windows_mapping_exists(SHARED_MEMORY_NAME):
+            if not _windows_mapping_exists(shm_path):
                 return False
             # Largest known layout first; an older engine's mapping is
             # smaller and refuses the bigger view, so fall back through the
             # sizes this reader understands.
             for size in KNOWN_MEMORY_SIZES:
                 try:
-                    _mmap = mmap.mmap(-1, size, tagname=SHARED_MEMORY_NAME)
+                    _mmap = mmap.mmap(-1, size, tagname=shm_path)
                     _mapped_size = size
+                    _mapped_path = shm_path
                     return True
                 except Exception:
                     continue
@@ -202,7 +264,8 @@ def _open_shared_memory():
 
 def _close_shared_memory():
     """Close the shared memory region."""
-    global _shm, _mmap
+    global _shm, _mmap, _mapped_path
+    _mapped_path = None
     
     if _mmap is not None:
         try:
@@ -230,9 +293,10 @@ def read_visualization_data() -> Optional[dict]:
     """
     global _mmap, _engine_sample_rate
 
-    if _mmap is None:
-        if not _open_shared_memory():
-            return None
+    # Cheap when already open; reopens if the port in the preferences
+    # changed since the mapping was opened.
+    if not _open_shared_memory():
+        return None
 
     try:
         snapshot = None

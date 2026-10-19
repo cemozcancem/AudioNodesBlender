@@ -65,7 +65,7 @@ public:
         commandServer_ = std::make_unique<CommandServer>(port);
         
         // Initialize shared memory
-        if (!sharedMemory_->initialize()) {
+        if (!sharedMemory_->initialize(port)) {
             std::cerr << "Warning: Failed to initialize shared memory" << std::endl;
         }
         
