@@ -1533,6 +1533,77 @@ def case_tap_accumulate_remove_tap_clears_state():
     assert_eq(left, [], "deleted analyzer left running totals behind")
 
 
+def case_tap_accumulate_duplicated_analyzer_is_independent():
+    """A copied analyzer shares tap_ids; its toggles must not touch the original.
+
+    Regression: _owner_node found a tap's analyzer by tap_id, and a duplicated
+    analyzer keeps its taps' ids. Toggling Accumulate on the copy's tap then
+    reset the ORIGINAL's running total, and turning it off deleted the
+    original's _acc channel. bpy.ops.node.duplicate needs a node editor, which
+    background Blender does not have, so the copy is simulated: a second
+    analyzer whose tap carries the same tap_id.
+    """
+    fft_taps = _taps_mod()
+    tree, orig, (t1,) = _acc_tree("AccDuplicate")
+    t1.accumulate = True
+    _seed_tap(orig, t1, 0.5)
+    _tick_taps(30)
+    ch_orig = fft_taps.acc_channel_name(orig, t1)
+    total = _acc_of(orig, t1)
+    assert_true(_close(total, 0.25), f"setup: original Σ {total}")
+    logic = fft_taps._ACC_STATE[ch_orig]
+
+    copy = tree.nodes.new("AudioFFTAnalyzerNode")
+    t2 = copy.add_tap(t1.center_hz, name=t1.name)
+    t2.tap_id = t1.tap_id                      # what copy() keeps
+    copy.sync_tap_sockets()
+    t2 = copy.taps[0]
+    assert_true(copy.engine_node_id != orig.engine_node_id, "setup: same engine id")
+    assert_eq(t2.tap_id, t1.tap_id, "setup: copy must share the tap_id")
+    ch_copy = fft_taps.acc_channel_name(copy, t2)
+    _seed_tap(copy, t2, 0.25)
+
+    def orig_unchanged(when):
+        assert_true(fft_taps._ACC_STATE.get(ch_orig) is logic,
+                    f"{when}: the original's running total was replaced")
+        assert_true(abs(logic.raw - total) < 1e-6,
+                    f"{when}: the original's total moved ({logic.raw} vs {total})")
+        assert_true(_close(_channel(ch_orig), total),
+                    f"{when}: the original's _acc channel is {_channel(ch_orig)}")
+        assert_true(orig.get_tap_acc_socket(t1.tap_id) is not None,
+                    f"{when}: the original lost its Σ output")
+
+    t2.accumulate = True
+    orig_unchanged("copy toggled on")
+    assert_true(copy.get_tap_acc_socket(t2.tap_id) is not None,
+                "toggling on the copy did not give the copy a Σ output")
+
+    _tick_taps(6)
+    total = _acc_of(orig, t1)
+    assert_true(_close(total, 0.25 + 0.5 * 0.1), f"original Σ {total}")
+    assert_true(_close(_channel(ch_copy), 0.25 * 0.1),
+                f"copy Σ not independent: {_channel(ch_copy)}")
+
+    t2.accumulate = False
+    orig_unchanged("copy toggled off")
+    assert_true(copy.get_tap_acc_socket(t2.tap_id) is None,
+                "toggling off the copy left the copy's Σ output")
+    assert_true(_channel(ch_copy) is None, "copy's _acc channel survived")
+    assert_true(ch_copy not in fft_taps._ACC_STATE, "copy's total survived")
+
+    # Renaming the copy's tap relabels the copy's sockets only, at once.
+    t2.accumulate = True
+    orig_names = [s.name for s in orig.outputs]
+    t2.name = "Renamed"
+    assert_eq(copy.get_tap_socket(t2.tap_id).name, "Renamed",
+              "renaming the copy's tap did not relabel the copy's output")
+    assert_eq(copy.get_tap_acc_socket(t2.tap_id).name, "Renamed" + ACC_LABEL,
+              "renaming the copy's tap did not relabel the copy's Σ output")
+    assert_eq([s.name for s in orig.outputs], orig_names,
+              "renaming the copy's tap relabelled the original")
+    orig_unchanged("copy renamed")
+
+
 def case_tap_accumulate_value_output_reads_acc_channel():
     """Value Output fed by Σ reads '_acc' and lands on Geometry Nodes."""
     smr = _addon().shared_memory_reader
