@@ -345,12 +345,29 @@ def _ordered(tree):
     return ordered
 
 
-def update_control_nodes(audio_data, resolve_input):
-    """Evaluate every control node once. Called ~60x/s by the reader."""
+def advance_tick() -> float:
+    """Seconds since the previous visualization tick (0 on the first).
+
+    The reader calls this once per tick and hands the result to both the
+    FFT tap Accumulate outputs and update_control_nodes(), so every
+    integrator in the add-on advances by the same dt. Clamped to 0.25 s so
+    a stall (file dialog, render) does not make values jump.
+    """
     global _last_tick
     now = time.monotonic()
     dt = 0.0 if _last_tick is None else min(0.25, max(0.0, now - _last_tick))
     _last_tick = now
+    return dt
+
+
+def update_control_nodes(audio_data, resolve_input, dt=None):
+    """Evaluate every control node once. Called ~60x/s by the reader.
+
+    `dt` is the tick's advance_tick() value; when omitted the tick is
+    advanced here (the behaviour before taps could accumulate).
+    """
+    if dt is None:
+        dt = advance_tick()
 
     for tree in bpy.data.node_groups:
         if tree.bl_idname != 'AudioNodeTree':

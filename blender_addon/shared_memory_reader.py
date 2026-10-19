@@ -531,12 +531,33 @@ def get_latest_spectrum(node_id: str = None):
     return _latest_spectrum
 
 
+_TAP_ACC_PARAM = "accumulated"   # == fft_taps.ACC_PARAM (no import per call)
+
+
+def _tap_output_channel(from_node, from_socket):
+    """Channel behind an FFT tap *output* socket, or None if it is not one.
+
+    Plain tap outputs (empty tap_param) read '<id>_tap_<tap_id>'; the
+    Accumulate output (tap_param == "accumulated") reads the '_acc'
+    channel. Tap param *inputs* carry other tap_param values and are never
+    link sources, so they return None here.
+    """
+    tap_id = getattr(from_socket, 'tap_id', '')
+    if not tap_id:
+        return None
+    tap_param = getattr(from_socket, 'tap_param', '')
+    if not tap_param:
+        return f"{from_node.engine_node_id}_tap_{tap_id}"
+    if tap_param == _TAP_ACC_PARAM:
+        return f"{from_node.engine_node_id}_tap_{tap_id}_acc"
+    return None
+
+
 def _resolve_control_source_value(audio_data, from_node, from_socket) -> float:
     """Resolve a control cable source to a float (shared by modulation paths)."""
-    # Frequency tap outputs: stable tap_id channel
-    tap_id = getattr(from_socket, 'tap_id', '')
-    if tap_id and not getattr(from_socket, 'tap_param', ''):
-        source_channel = f"{from_node.engine_node_id}_tap_{tap_id}"
+    # Frequency tap outputs: stable tap_id channel (normal or accumulated)
+    source_channel = _tap_output_channel(from_node, from_socket)
+    if source_channel is not None:
         if source_channel in audio_data.channels:
             return audio_data.channels[source_channel].value
         return 0.0
@@ -704,6 +725,50 @@ def _update_fft_tap_outputs(audio_data, data: dict):
                     channel = audio_data.channels.add()
                     channel.name = channel_name
                 audio_data.channels[channel_name].value = value
+
+
+def _update_tap_accumulators(audio_data, dt: float):
+    """Advance every tap's Accumulate output by one tick.
+
+    Integrates the tap's FINAL output - the value just published on
+    '<id>_tap_<tap_id>' (after gain, smoothing and Min/Max mapping) - with
+    control_logic.AccumulatorLogic, and publishes '<id>_tap_<tap_id>_acc'.
+
+    Runs right after _update_fft_tap_outputs and before Math, the control
+    nodes, control connections, Value Output and drivers, with the same dt
+    as the control nodes - so everything downstream sees this tick's value
+    (no one-tick lag).
+
+    A muted analyzer or a disabled tap holds its count instead of
+    integrating its resting value. State for taps that are gone or have
+    Accumulate off is dropped here every tick, whatever removed them
+    (delete, toggle, undo, file load).
+    """
+    from .nodes.effects import fft_taps
+    from .nodes.control.control_nodes import publish
+
+    live = set()
+    for tree in bpy.data.node_groups:
+        if tree.bl_idname != 'AudioNodeTree':
+            continue
+        for node in tree.nodes:
+            if node.bl_idname != 'AudioFFTAnalyzerNode':
+                continue
+            node_muted = bool(getattr(node, 'mute', False))
+            for tap in getattr(node, 'taps', ()):
+                if not tap.tap_id or not getattr(tap, 'accumulate', False):
+                    continue
+                channel = fft_taps.acc_channel_name(node, tap)
+                live.add(channel)
+                if node_muted or not tap.enabled:
+                    value = fft_taps.acc_current(channel, tap)
+                else:
+                    source = audio_data.channels.get(
+                        fft_taps.tap_channel_name(node, tap))
+                    rate = source.value if source is not None else 0.0
+                    value = fft_taps.acc_step(channel, tap, rate, dt)
+                publish(audio_data, channel, value)
+    fft_taps.acc_keep_only(live)
 
 
 def _update_fft_analyzer_outputs(audio_data, data: dict):
@@ -1287,11 +1352,12 @@ def _update_value_output_nodes(audio_data, data: dict):
                 from_socket = from_link.from_socket
 
                 # Frequency tap sockets resolve via their stable tap_id -
-                # never by name (all taps may be named "Tap").
+                # never by name (all taps may be named "Tap"). The
+                # Accumulate output resolves to the tap's '_acc' channel.
                 tap_id = getattr(from_socket, 'tap_id', '')
                 if tap_id:
-                    source_channel = f"{from_node.engine_node_id}_tap_{tap_id}"
-                    if source_channel in audio_data.channels:
+                    source_channel = _tap_output_channel(from_node, from_socket)
+                    if source_channel and source_channel in audio_data.channels:
                         source_value = audio_data.channels[source_channel].value
                 # Check if source node has get_output_channel_name (LFO, MIDI CC, FFT, etc.)
                 elif hasattr(from_node, 'get_output_channel_name'):
@@ -1413,14 +1479,17 @@ def _has_control_nodes() -> bool:
     return False
 
 
-def _update_control_nodes(audio_data):
+def _update_control_nodes(audio_data, dt=None):
     """Trigger / Accumulator / Decay / Camera Cutter (Blender-only).
 
     Runs after the Math pass so they see this tick's Math values, then
     Math runs again so a Math node fed BY a control node is fresh too.
+    `dt` is this tick's control_nodes.advance_tick(); None computes it
+    from the node module's own clock (older callers, tests).
     """
     from .nodes.control import control_nodes
-    control_nodes.update_control_nodes(audio_data, _resolve_input(audio_data))
+    control_nodes.update_control_nodes(audio_data, _resolve_input(audio_data),
+                                       dt)
 
 
 # ---------------------------------------------------------------------------
@@ -1495,6 +1564,11 @@ def _prune_stale_caches():
         caches.append(_CONTROL_STATE)
     except Exception:
         pass
+    try:
+        from .nodes.effects.fft_taps import _ACC_STATE
+        caches.append(_ACC_STATE)
+    except Exception:
+        pass
 
     for cache in caches:
         for key in [k for k in cache if _is_dead_key(k, live)]:
@@ -1522,7 +1596,12 @@ def prune_stale_channels():
         doomed = []
         for i, channel in enumerate(audio_data.channels):
             match = _NODE_CHANNEL_RE.match(channel.name)
-            if match and match.group(1) not in live:
+            # The regex can mis-split a name whose later parts also look
+            # like an id (a tap Accumulate channel
+            # '<id>_tap_<tap_id>_acc' with all-letter hex), so a channel
+            # any live node id prefixes is always kept.
+            if (match and match.group(1) not in live
+                    and _is_dead_key(channel.name, live)):
                 doomed.append(i)
         for i in reversed(doomed):
             audio_data.channels.remove(i)
@@ -1646,16 +1725,25 @@ def _update_audio_data():
             # downstream of them resolves against these channels.
             _update_control_node_outputs(audio_data, data)
 
+            # One dt for this tick, shared by tap Accumulate outputs and
+            # the control nodes so both integrate over the same time step.
+            from .nodes.control import control_nodes as _control_nodes
+            tick_dt = _control_nodes.advance_tick()
+
             # Frequency tap channels (user-picked bands + param overrides)
             _update_fft_tap_outputs(audio_data, data)
-            
+
+            # Tap Accumulate outputs integrate this tick's tap values, and
+            # land before Math / control nodes / Value Output read them.
+            _update_tap_accumulators(audio_data, tick_dt)
+
             # Update math node control outputs
             _update_math_nodes(audio_data)
 
             # Control nodes (Trigger, Accumulator, Decay, Camera Cutter),
             # then Math again for anything downstream of them
             if _has_control_nodes():
-                _update_control_nodes(audio_data)
+                _update_control_nodes(audio_data, tick_dt)
                 _update_math_nodes(audio_data)
 
             # Update control socket connections (LFO -> Filter, Math -> others, etc.)

@@ -13,6 +13,7 @@ import uuid
 import bpy
 from bpy.props import (
     BoolProperty,
+    EnumProperty,
     FloatProperty,
     FloatVectorProperty,
     StringProperty,
@@ -325,20 +326,181 @@ def resolve_analyzer(ref):
     return (None, None)
 
 
-def _tap_prop_changed(self, context):
-    """Keep the socket label in sync when a tap is renamed."""
-    node = getattr(self, "id_data", None)
-    # id_data is the node tree; find the owning node via the tap_id.
+# ---------------------------------------------------------------------------
+# Accumulate - a running total per tap
+#
+# With Accumulate on, a tap gets a second output socket whose value keeps
+# moving forward, faster when the band is louder:
+#
+#     value += accumulate_gain * tap_output * dt
+#
+# The math is control_logic.AccumulatorLogic, the same class behind the
+# Accumulator node - never re-implemented here. The running total lives in
+# that Python object (64-bit float) and is only *published* to the 32-bit
+# channel '<engine_node_id>_tap_<tap_id>_acc'. It is runtime state: never
+# saved in the .blend, so it starts again from Low (or 0) on file load.
+#
+# The extra output socket is identified by tap_id + tap_param == ACC_PARAM.
+# Plain tap outputs have an empty tap_param, so get_tap_socket() and every
+# "tap_id and not tap_param" check keep treating only the plain socket as
+# the tap's normal output.
+# ---------------------------------------------------------------------------
+
+ACC_PARAM = "accumulated"
+ACC_CHANNEL_SUFFIX = "_acc"
+ACC_LABEL_SUFFIX = " · Σ"   # "<Tap name> · Σ"
+
+ACC_MODE_ITEMS = [
+    ('NONE', "Unbounded", "Keep counting up forever"),
+    ('WRAP', "Wrap",
+     "Start again at Low after reaching High. Good for looping motion "
+     "such as rotation"),
+    ('PINGPONG', "Ping-Pong", "Go back and forth between Low and High"),
+    ('CLAMP', "Clamp", "Stop at Low or High"),
+]
+
+# channel name -> control_logic.AccumulatorLogic. Keyed by channel name so
+# the key carries the analyzer's engine_node_id and the stale-cache pruner
+# drops it when the node is deleted. Main thread only (bpy timers).
+_ACC_STATE = {}
+
+
+def tap_channel_name(node, tap) -> str:
+    """Channel carrying a tap's normal output."""
+    return f"{node.engine_node_id}_tap_{tap.tap_id}"
+
+
+def acc_channel_name(node, tap) -> str:
+    """Channel carrying a tap's accumulated output."""
+    return tap_channel_name(node, tap) + ACC_CHANNEL_SUFFIX
+
+
+def acc_socket_name(label_base: str) -> str:
+    return f"{label_base}{ACC_LABEL_SUFFIX}"
+
+
+def acc_reset_value(tap) -> float:
+    """Where Reset (and a fresh start) puts the value: Low, or 0 unbounded."""
+    if getattr(tap, "accumulate_mode", 'NONE') == 'NONE':
+        return 0.0
+    return float(tap.accumulate_low)
+
+
+def acc_state(channel: str, tap):
+    """The AccumulatorLogic for a channel, created at the reset value."""
+    logic = _ACC_STATE.get(channel)
+    if logic is None:
+        from ..control import control_logic
+        logic = control_logic.AccumulatorLogic()
+        logic.reset(acc_reset_value(tap))
+        _ACC_STATE[channel] = logic
+    return logic
+
+
+def acc_step(channel: str, tap, rate: float, dt: float) -> float:
+    """Advance a tap's running total by one tick; returns the value to publish."""
+    logic = acc_state(channel, tap)
+    value, _wrap = logic.step(
+        rate, dt, 0.0, float(tap.accumulate_gain), tap.accumulate_mode,
+        float(tap.accumulate_low), float(tap.accumulate_high))
+    return value
+
+
+def acc_current(channel: str, tap) -> float:
+    """Current published value without advancing (paused / muted taps)."""
+    # A zero-length step applies the mode's bounds without moving.
+    return acc_step(channel, tap, 0.0, 0.0)
+
+
+def acc_reset(channel: str, tap) -> float:
+    """Put a tap's running total back to Low (or 0 when Unbounded)."""
+    logic = acc_state(channel, tap)
+    value = acc_reset_value(tap)
+    logic.reset(value)
+    return value
+
+
+def acc_discard(channel: str):
+    """Forget a tap's running total (toggle off, tap removed, node freed)."""
+    _ACC_STATE.pop(channel, None)
+
+
+def acc_discard_node(engine_node_id: str):
+    """Forget every running total belonging to one analyzer."""
+    prefix = f"{engine_node_id}_tap_"
+    for key in [k for k in _ACC_STATE if k.startswith(prefix)]:
+        del _ACC_STATE[key]
+
+
+def acc_keep_only(live_channels):
+    """Drop running totals whose tap is gone or no longer accumulates."""
+    for key in [k for k in _ACC_STATE if k not in live_channels]:
+        del _ACC_STATE[key]
+
+
+def remove_scene_channel(name: str):
+    """Delete one channel from every scene (it is saved in the .blend)."""
+    for scene in bpy.data.scenes:
+        audio_data = getattr(scene, "audio_nodes_data", None)
+        if audio_data is None:
+            continue
+        index = audio_data.channels.find(name)
+        if index >= 0:
+            audio_data.channels.remove(index)
+
+
+def _owner_node(tap):
+    """The analyzer node that owns this tap PropertyGroup, or None.
+
+    Matched by identity (the tap's RNA pointer), not by tap_id: a duplicated
+    analyzer keeps its taps' ids (drivers and links reference them), so an
+    id search could land on the original node instead of the copy - and
+    toggling Accumulate on the copy would reset the original's total.
+    (path_from_id() would be the obvious route, but Blender cannot build a
+    path for a PropertyGroup inside a Python node.) The id search remains
+    only as a fallback.
+    """
+    tree = getattr(tap, "id_data", None)
+    if tree is None:
+        return None
+    analyzers = [n for n in getattr(tree, "nodes", [])
+                 if n.bl_idname == 'AudioFFTAnalyzerNode']
+    try:
+        pointer = tap.as_pointer()
+        for n in analyzers:
+            for t in n.taps:
+                if t.as_pointer() == pointer:
+                    return n
+    except Exception:
+        pass
+    for n in analyzers:
+        for t in n.taps:
+            if t.tap_id == tap.tap_id:
+                return n
+    return None
+
+
+def _tap_accumulate_changed(self, context):
+    """Add/remove the accumulated output; always start from a fresh total."""
+    node = _owner_node(self)
     if node is None:
         return
-    for n in getattr(node, "nodes", []):
-        if n.bl_idname != 'AudioFFTAnalyzerNode':
-            continue
-        for tap in n.taps:
-            if tap.tap_id == self.tap_id:
-                if hasattr(n, "sync_tap_sockets"):
-                    n.sync_tap_sockets()
-                return
+    channel = acc_channel_name(node, self)
+    acc_discard(channel)
+    if not self.accumulate:
+        try:
+            remove_scene_channel(channel)
+        except Exception:
+            pass
+    if hasattr(node, "sync_tap_sockets"):
+        node.sync_tap_sockets()
+
+
+def _tap_prop_changed(self, context):
+    """Keep the socket label in sync when a tap is renamed."""
+    node = _owner_node(self)
+    if node is not None and hasattr(node, "sync_tap_sockets"):
+        node.sync_tap_sockets()
 
 
 class AudioFrequencyTap(bpy.types.PropertyGroup):
@@ -435,6 +597,45 @@ class AudioFrequencyTap(bpy.types.PropertyGroup):
         subtype='FACTOR'
     )
 
+    # --- Accumulate (second output: a running total) ---------------------
+    # Older files have none of these, so every tap loads with
+    # Accumulate off and no extra socket.
+    accumulate: BoolProperty(
+        name="Accumulate",
+        description="Add a second output that keeps counting up, faster "
+                    "when this band is louder",
+        default=False,
+        update=_tap_accumulate_changed
+    )
+
+    accumulate_gain: FloatProperty(
+        name="Rate Gain",
+        description="How fast the count grows: how much it goes up per "
+                    "second for each unit of this tap's output",
+        default=1.0,
+        soft_min=-10.0,
+        soft_max=10.0
+    )
+
+    accumulate_mode: EnumProperty(
+        name="Mode",
+        description="What the count does when it reaches Low or High",
+        items=ACC_MODE_ITEMS,
+        default='NONE'
+    )
+
+    accumulate_low: FloatProperty(
+        name="Low",
+        description="Lowest value of the count (Reset goes back here)",
+        default=0.0
+    )
+
+    accumulate_high: FloatProperty(
+        name="High",
+        description="Highest value of the count",
+        default=1.0
+    )
+
     color: FloatVectorProperty(
         name="Color",
         description="Marker and socket color",
@@ -471,6 +672,8 @@ _TAP_EXPR = _re.compile(
     r"""audio_tap\(\s*['"](?P<node>[^'"]+)['"]\s*"""
     r"""(?:,\s*(?:['"](?P<ref>[^'"]*)['"]|(?P<index>\d+)))?""")
 _NODE_PATH = _re.compile(r'nodes\["(?P<node>[^"]+)"\]')
+# The rest of the call, after _TAP_EXPR: audio_tap(..., accumulated=True)
+_ACC_KWARG = _re.compile(r'^[^)]*\baccumulated\s*=\s*(?:True|1)\b')
 
 
 def _axis_suffix(id_block, fcurve):
@@ -547,6 +750,11 @@ def _scan_tap_targets():
                 if not tap_id or tap_id not in tap_index_by_id:
                     continue
                 index = tap_index_by_id[tap_id]
+                # The accumulated output drives things too; mark those so
+                # "Drives:" says which of the tap's two outputs is used.
+                suffix = (ACC_LABEL_SUFFIX
+                          if getattr(socket, 'tap_param', '') == ACC_PARAM
+                          else "")
                 # Follow links (through pass-through nodes) up to 2 hops
                 frontier = [link.to_node for link in socket.links]
                 seen = set()
@@ -561,10 +769,11 @@ def _scan_tap_targets():
                             prop = getattr(dest, 'property_name', '')
                             if obj is not None and prop:
                                 add(tree.name, node.name, index,
-                                    f"{obj.name} › {prop} (geo nodes)")
+                                    f"{obj.name} › {prop} (geo nodes)"
+                                    + suffix)
                             else:
                                 add(tree.name, node.name, index,
-                                    f"{dest.name} (unassigned)")
+                                    f"{dest.name} (unassigned)" + suffix)
                         else:
                             for out in dest.outputs:
                                 for link in out.links:
@@ -613,8 +822,10 @@ def _scan_tap_targets():
                 index = resolve_tap_index(analyzer.taps, ref)
                 if index < 0:
                     continue
-                add(tree.name, analyzer.name, index,
-                    _describe_driver_target(id_block, fcurve))
+                label = _describe_driver_target(id_block, fcurve)
+                if _ACC_KWARG.match(expr[m.end():]):
+                    label += ACC_LABEL_SUFFIX
+                add(tree.name, analyzer.name, index, label)
 
     return targets
 
@@ -661,6 +872,8 @@ class AUDIONODES_UL_taps(bpy.types.UIList):
             pass
         if driven:
             info.label(text="", icon='LINKED')
+        if getattr(tap, "accumulate", False):
+            info.label(text="Σ")
         hz = tap.center_hz
         hz_text = f"{hz / 1000.0:.1f}k" if hz >= 1000 else f"{hz:.0f}"
         info.label(text=f"{hz_text} Hz")

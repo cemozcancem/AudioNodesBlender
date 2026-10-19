@@ -421,6 +421,53 @@ class AUDIONODES_OT_remove_tap(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class AUDIONODES_OT_reset_tap_accumulator(bpy.types.Operator):
+    """Put this tap's count back to Low (or to 0 when Unbounded)"""
+    bl_idname = "audionodes.reset_tap_accumulator"
+    bl_label = "Reset Count"
+    bl_options = {'REGISTER', 'INTERNAL'}
+
+    node_name: bpy.props.StringProperty()
+    tap_id: bpy.props.StringProperty()
+
+    def _find(self, context):
+        """(node, tap) - the open tree first, then any Audio Nodes tree."""
+        trees = []
+        space = getattr(context, "space_data", None)
+        edit_tree = getattr(space, "edit_tree", None)
+        if edit_tree is not None:
+            trees.append(edit_tree)
+        trees.extend(t for t in bpy.data.node_groups
+                     if t.bl_idname == 'AudioNodeTree' and t not in trees)
+        for tree in trees:
+            node = tree.nodes.get(self.node_name)
+            if node is None or node.bl_idname != 'AudioFFTAnalyzerNode':
+                continue
+            for tap in node.taps:
+                if tap.tap_id and tap.tap_id == self.tap_id:
+                    return node, tap
+        return None, None
+
+    def execute(self, context):
+        node, tap = self._find(context)
+        if node is None or not tap.accumulate:
+            return {'CANCELLED'}
+        channel = fft_taps.acc_channel_name(node, tap)
+        value = fft_taps.acc_reset(channel, tap)
+        # Publish at once so the panel and anything wired to it update
+        # without waiting for the next audio tick.
+        for scene in bpy.data.scenes:
+            audio_data = getattr(scene, "audio_nodes_data", None)
+            if audio_data is None:
+                continue
+            ch = audio_data.channels.get(channel)
+            if ch is None:
+                ch = audio_data.channels.add()
+                ch.name = channel
+            ch.value = value
+        return {'FINISHED'}
+
+
 class AUDIONODES_OT_tap_to_value_output(bpy.types.Operator):
     """Create a Value Output node wired to this tap"""
     bl_idname = "audionodes.tap_to_value_output"

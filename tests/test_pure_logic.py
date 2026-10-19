@@ -340,6 +340,79 @@ finally:
         if v is None: sys.modules.pop(k, None)
         else: sys.modules[k] = v
 
+# ======================================================================
+# Issue #13: a tap's Accumulate output must reuse control_logic's
+# AccumulatorLogic (the Accumulator node's class), never its own math.
+print("\n[9] tap Accumulate reuses AccumulatorLogic (issue #13)")
+_ctl = types.ModuleType("an.nodes.control")
+_ctl.__path__ = [str(ROOT / "nodes" / "control")]
+sys.modules.setdefault("an.nodes.control", _ctl)
+cl = load("control_logic", "nodes/control/control_logic.py")
+
+check("fft_taps has acc_step", callable(getattr(ft, "acc_step", None)), True)
+if callable(getattr(ft, "acc_step", None)):
+    ft._ACC_STATE.clear()
+    acc_tap = types.SimpleNamespace(accumulate=True, accumulate_gain=2.0,
+                                    accumulate_mode='NONE',
+                                    accumulate_low=0.0, accumulate_high=1.0)
+    ref = cl.AccumulatorLogic()
+    dt = 1.0 / 60.0
+    same = True
+    for i in range(90):
+        rate = 0.25 + 0.5 * (i % 7) / 7.0       # an uneven "tap output"
+        got = ft.acc_step("x_tap_1_acc", acc_tap, rate, dt)
+        want, _w = ref.step(rate, dt, 0.0, 2.0, 'NONE', 0.0, 1.0)
+        same = same and got == want
+    check("tap total == AccumulatorLogic, step for step", same, True)
+    check("tap state is AccumulatorLogic",
+          type(ft._ACC_STATE.get("x_tap_1_acc")) is cl.AccumulatorLogic, True)
+
+    # tap x gain x dt
+    ft._ACC_STATE.clear()
+    v = 0.0
+    for _ in range(60):
+        v = ft.acc_step("y_tap_1_acc", acc_tap, 0.5, dt)
+    check("one second of 0.5 at gain 2 -> 1.0", round(v, 9), 1.0)
+
+    # Wrap stays inside Low/High; Reset goes to Low (or 0 when Unbounded)
+    wrap_tap = types.SimpleNamespace(**dict(vars(acc_tap),
+        accumulate_mode='WRAP', accumulate_low=0.25, accumulate_high=0.75))
+    vals = [ft.acc_step("w_tap_1_acc", wrap_tap, 1.0, dt) for _ in range(200)]
+    check("wrap within low/high",
+          all(0.25 <= x < 0.75 for x in vals), True)
+    check("reset bounded -> low", ft.acc_reset("w_tap_1_acc", wrap_tap), 0.25)
+    check("reset unbounded -> 0", ft.acc_reset("y_tap_1_acc", acc_tap), 0.0)
+    check("current() does not advance",
+          (ft.acc_current("y_tap_1_acc", acc_tap),
+           ft.acc_current("y_tap_1_acc", acc_tap)), (0.0, 0.0))
+    ft.acc_step("w_tap_2_acc", wrap_tap, 1.0, dt)
+    ft.acc_discard_node("w")
+    check("discard_node drops only that node's taps",
+          sorted(ft._ACC_STATE), ["y_tap_1_acc"])
+    ft.acc_step("z_tap_1_acc", acc_tap, 1.0, dt)
+    ft.acc_keep_only({"z_tap_1_acc"})
+    check("keep_only sweeps the rest", sorted(ft._ACC_STATE), ["z_tap_1_acc"])
+    ft._ACC_STATE.clear()
+
+# No integration math of its own in fft_taps: no "... * dt" anywhere.
+ft_tree = ast.parse((ROOT / "nodes/effects/fft_taps.py").read_text())
+own_dt_math = [n.lineno for n in ast.walk(ft_tree)
+               if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Mult)
+               and any(isinstance(s, ast.Name) and s.id == "dt"
+                       for s in (n.left, n.right))]
+check("fft_taps does no '* dt' math itself", own_dt_math, [])
+
+# Driver-target scan marks drivers that read the accumulated value
+acc_kw = getattr(ft, "_ACC_KWARG", None)
+check("driver scan has an accumulated= matcher", acc_kw is not None, True)
+if acc_kw is not None:
+    for tail, want in ((', accumulated=True)', True),
+                       (', 0.0, accumulated = 1)', True),
+                       (')', False),
+                       (', accumulated=False)', False),
+                       (') + audio_tap("A", "b", accumulated=True)', False)):
+        check(f"accumulated matcher {tail!r}", bool(acc_kw.match(tail)), want)
+
 print("\n" + "="*60)
 print("FAILURES:", len(FAILS))
 for f in FAILS: print("  -", f)
