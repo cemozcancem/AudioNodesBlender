@@ -124,6 +124,15 @@ class AudioFFTAnalyzerNode(AudioNodeBase):
         """Remove a tap and its socket (links are dropped with the socket)."""
         if index < 0 or index >= len(self.taps):
             return
+        tap = self.taps[index]
+        if tap.tap_id:
+            # Its running total goes with it - no state may outlive a tap.
+            channel = fft_taps.acc_channel_name(self, tap)
+            fft_taps.acc_discard(channel)
+            try:
+                fft_taps.remove_scene_channel(channel)
+            except Exception:
+                pass
         self.taps.remove(index)
         self.active_tap_index = min(self.active_tap_index, len(self.taps) - 1)
         self.sync_tap_sockets()
@@ -133,6 +142,14 @@ class AudioFFTAnalyzerNode(AudioNodeBase):
         for socket in self.outputs:
             if (getattr(socket, "tap_id", "") == tap_id
                     and not getattr(socket, "tap_param", "")):
+                return socket
+        return None
+
+    def get_tap_acc_socket(self, tap_id: str):
+        """Return the tap's *accumulated* output socket, or None."""
+        for socket in self.outputs:
+            if (getattr(socket, "tap_id", "") == tap_id
+                    and getattr(socket, "tap_param", "") == fft_taps.ACC_PARAM):
                 return socket
         return None
 
@@ -147,16 +164,27 @@ class AudioFFTAnalyzerNode(AudioNodeBase):
     def sync_tap_sockets(self):
         """Mirror taps collection onto output + per-param input sockets.
 
-        Identity is (tap_id) for outputs and (tap_id, tap_param) for inputs.
+        Identity is (tap_id, tap_param) everywhere: outputs have an empty
+        tap_param (normal output) or ACC_PARAM (accumulated output, only
+        while the tap's Accumulate is on); inputs carry the param key.
         Labels follow tap display names; add/remove rebuilds the set.
+
+        Runs every visualization tick, so it only writes RNA on change.
         """
         wanted = {tap.tap_id: tap for tap in self.taps if tap.tap_id}
         wanted_params = fft_taps.TAP_CONTROL_PARAM_KEYS
 
-        # Drop output sockets whose tap no longer exists
+        # Drop output sockets whose tap no longer exists, and accumulated
+        # outputs whose tap has Accumulate off (links go with the socket).
         for socket in list(self.outputs):
             tap_id = getattr(socket, "tap_id", "")
-            if tap_id and tap_id not in wanted:
+            if not tap_id:
+                continue
+            tap_param = getattr(socket, "tap_param", "")
+            if tap_id not in wanted:
+                self.outputs.remove(socket)
+            elif (tap_param == fft_taps.ACC_PARAM
+                    and not getattr(wanted[tap_id], "accumulate", False)):
                 self.outputs.remove(socket)
 
         # Drop param input sockets whose tap is gone or param is unknown
@@ -183,6 +211,22 @@ class AudioFFTAnalyzerNode(AudioNodeBase):
             elif out.name != label_base:
                 out.name = label_base
 
+            # --- accumulated output, right after the normal one ---
+            if getattr(tap, "accumulate", False):
+                acc_name = fft_taps.acc_socket_name(label_base)
+                acc = self.get_tap_acc_socket(tap.tap_id)
+                if acc is None:
+                    acc = self.outputs.new('ControlSocketType', acc_name)
+                    acc.tap_id = tap.tap_id
+                    acc.tap_param = fft_taps.ACC_PARAM
+                elif acc.name != acc_name:
+                    acc.name = acc_name
+                out_index = self._output_index(out)
+                acc_index = self._output_index(acc)
+                if 0 <= out_index and acc_index != out_index + 1:
+                    target = out_index + 1 if acc_index > out_index else out_index
+                    self.outputs.move(acc_index, target)
+
             # --- param inputs (fixed order from TAP_CONTROL_PARAMS) ---
             # Names MUST be unique per tap. Duplicate names ("Gain" on every
             # tap) made Blender share/migrate links when switching visibility.
@@ -198,6 +242,12 @@ class AudioFFTAnalyzerNode(AudioNodeBase):
                     inp.name = sock_name
 
         self.update_tap_param_input_visibility()
+
+    def _output_index(self, socket) -> int:
+        for i, s in enumerate(self.outputs):
+            if s == socket:
+                return i
+        return -1
 
     def update_tap_param_input_visibility(self):
         """Show only the active tap's param inputs — keeps the node short.
@@ -224,6 +274,11 @@ class AudioFFTAnalyzerNode(AudioNodeBase):
 
     def get_initial_params(self) -> dict:
         return {}
+
+    def free(self):
+        """Node deleted: drop every tap's running total with it."""
+        fft_taps.acc_discard_node(self.engine_node_id)
+        super().free()
 
     def update(self):
         """Called when node tree topology changes."""
@@ -323,6 +378,32 @@ class AudioFFTAnalyzerNode(AudioNodeBase):
                 sub.label(text="", icon=_link_icon("trigger_probability"))
                 sub.prop(tap, "trigger_probability", text="")
 
+                # Accumulate: a second output that keeps counting up
+                acc_box = box.column(align=True)
+                acc_box.prop(tap, "accumulate", text="Accumulate",
+                             toggle=True, icon='FORCE_VORTEX')
+                if tap.accumulate:
+                    acc_box.prop(tap, "accumulate_gain", text="Rate Gain")
+                    acc_box.prop(tap, "accumulate_mode", text="")
+                    if tap.accumulate_mode != 'NONE':
+                        row = acc_box.row(align=True)
+                        row.prop(tap, "accumulate_low", text="Low")
+                        row.prop(tap, "accumulate_high", text="High")
+                    row = acc_box.row(align=True)
+                    value = 0.0
+                    try:
+                        ch = context.scene.audio_nodes_data.channels.get(
+                            fft_taps.acc_channel_name(self, tap))
+                        if ch is not None:
+                            value = ch.value
+                    except Exception:
+                        pass
+                    row.label(text=f"Σ {value:.2f}")
+                    op = row.operator("audionodes.reset_tap_accumulator",
+                                      text="Reset", icon='LOOP_BACK')
+                    op.node_name = self.name
+                    op.tap_id = tap.tap_id
+
                 # What is this tap driving right now?
                 targets = fft_taps.get_tap_targets(self).get(
                     self.active_tap_index, [])
@@ -361,6 +442,7 @@ class AudioFFTAnalyzerNode(AudioNodeBase):
                 op.tap_index = self.active_tap_index
                 op.tap_ref = ref
                 op.node_ref = node_ref
+                op.accumulated = bool(tap.accumulate)
                 op = actions.operator("audionodes.remove_tap",
                                       text="", icon='TRASH')
                 op.node_name = self.name
@@ -376,7 +458,14 @@ class AudioFFTAnalyzerNode(AudioNodeBase):
 
     def get_output_channel_name(self, output_name: str) -> str:
         """Get the channel name for an output socket."""
-        # Tap sockets first (their names are user-defined)
+        # Tap sockets first (their names are user-defined). Accumulated
+        # outputs are matched by socket identity, not by tap name.
+        for socket in self.outputs:
+            if (socket.name == output_name
+                    and getattr(socket, "tap_param", "") == fft_taps.ACC_PARAM):
+                for tap in self.taps:
+                    if tap.tap_id and tap.tap_id == socket.tap_id:
+                        return fft_taps.acc_channel_name(self, tap)
         for tap in self.taps:
             if tap.name == output_name and tap.tap_id:
                 return f"{self.engine_node_id}_tap_{tap.tap_id}"

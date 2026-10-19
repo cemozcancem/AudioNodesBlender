@@ -167,6 +167,7 @@ classes = [
     adsr_node.AUDIONODES_OT_release_adsr,
     spectrum_overlay.AUDIONODES_OT_add_tap,
     spectrum_overlay.AUDIONODES_OT_remove_tap,
+    spectrum_overlay.AUDIONODES_OT_reset_tap_accumulator,
     spectrum_overlay.AUDIONODES_OT_tap_to_value_output,
     audio_drivers.AUDIONODES_OT_copy_tap_driver,
     nla_scrub_node.AUDIONODES_OT_nla_setup,
