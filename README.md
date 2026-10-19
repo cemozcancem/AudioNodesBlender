@@ -65,7 +65,7 @@ A tap's normal output follows the level: it jumps up and down with the music. If
 - A second output appears, named after the tap with **Σ** (for example "Kick · Σ"). It counts up over time, faster when that band is louder. The normal output stays as it was.
 - **Rate Gain** sets how fast it counts. **Mode** sets what happens at the ends: **Unbounded** keeps counting, **Wrap** loops between **Low** and **High**, **Ping-Pong** bounces between them, **Clamp** stops at them. **Reset** sends the count back to Low (or to 0 when Unbounded).
 - Use the Σ output like any other: wire it to **Value Output**, **Math** or other nodes. For a driver, click the copy button marked **Σ** (the normal copy button still copies the level). The **Drives** list shows "· Σ" for things driven by the count.
-- Turning Accumulate off removes the Σ output and anything connected to it.
+- Turning Accumulate off removes the Σ output and its connections. Anything it was moving goes back to rest.
 
 > **Tip:** Use **Wrap** for looping motion such as rotation. Unbounded counts slowly lose precision after very long runs.
 
@@ -169,7 +169,7 @@ Audio Nodes has two parts. The Blender add-on (Python) draws the nodes and reads
 └───────────────────────────────────────────────────────────────┘
 ```
 
-Driver expressions use two functions the add-on registers: `audio_tap("<node>", "<tap>")` for an FFT tap and `audio_channel("<name>")` for any other output.
+Driver expressions use two functions the add-on registers: `audio_tap("<node>", "<tap>")` for an FFT tap (add `accumulated=True`, as in `audio_tap("<node>", "<tap>", accumulated=True)`, to read the tap's Σ count) and `audio_channel("<name>")` for any other output.
 
 [ARCHITECTURE.md](ARCHITECTURE.md) covers the details: node types, the ZeroMQ command protocol, the shared memory layout and the threading rules.
 

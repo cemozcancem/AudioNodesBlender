@@ -8,6 +8,7 @@ C++ engine is untouched.
 """
 
 import math
+import re as _re_mod
 import uuid
 
 import bpy
@@ -449,11 +450,34 @@ def remove_scene_channel(name: str):
             audio_data.channels.remove(index)
 
 
+# 'nodes["<name>"].taps[3]' - the RNA path of a tap inside its tree. Node
+# names are escaped the bpy.utils.escape_identifier way (\" and \\).
+_TAP_PATH = _re_mod.compile(r'^nodes\["((?:[^"\\]|\\.)*)"\]\.taps\[\d+\]$')
+_UNESCAPE = _re_mod.compile(r'\\(.)')
+
+
 def _owner_node(tap):
-    """(analyzer node) that owns this tap PropertyGroup, or None."""
+    """The analyzer node that owns this tap PropertyGroup, or None.
+
+    Resolved from the tap's own RNA path, not by tap_id: a duplicated
+    analyzer keeps its taps' ids (drivers and links reference them), so an
+    id search could land on the original node instead of the copy. The id
+    search is kept only as a fallback if the path cannot be read.
+    """
     tree = getattr(tap, "id_data", None)
     if tree is None:
         return None
+    try:
+        match = _TAP_PATH.match(tap.path_from_id())
+        if match:
+            node = tree.nodes.get(_UNESCAPE.sub(r"\1", match.group(1)))
+            if (node is not None
+                    and node.bl_idname == 'AudioFFTAnalyzerNode'
+                    and any(t.as_pointer() == tap.as_pointer()
+                            for t in node.taps)):
+                return node
+    except Exception:
+        pass
     for n in getattr(tree, "nodes", []):
         if n.bl_idname != 'AudioFFTAnalyzerNode':
             continue
@@ -481,18 +505,9 @@ def _tap_accumulate_changed(self, context):
 
 def _tap_prop_changed(self, context):
     """Keep the socket label in sync when a tap is renamed."""
-    node = getattr(self, "id_data", None)
-    # id_data is the node tree; find the owning node via the tap_id.
-    if node is None:
-        return
-    for n in getattr(node, "nodes", []):
-        if n.bl_idname != 'AudioFFTAnalyzerNode':
-            continue
-        for tap in n.taps:
-            if tap.tap_id == self.tap_id:
-                if hasattr(n, "sync_tap_sockets"):
-                    n.sync_tap_sockets()
-                return
+    node = _owner_node(self)
+    if node is not None and hasattr(node, "sync_tap_sockets"):
+        node.sync_tap_sockets()
 
 
 class AudioFrequencyTap(bpy.types.PropertyGroup):
