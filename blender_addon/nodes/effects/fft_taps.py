@@ -8,7 +8,6 @@ C++ engine is untouched.
 """
 
 import math
-import re as _re_mod
 import uuid
 
 import bpy
@@ -450,37 +449,31 @@ def remove_scene_channel(name: str):
             audio_data.channels.remove(index)
 
 
-# 'nodes["<name>"].taps[3]' - the RNA path of a tap inside its tree. Node
-# names are escaped the bpy.utils.escape_identifier way (\" and \\).
-_TAP_PATH = _re_mod.compile(r'^nodes\["((?:[^"\\]|\\.)*)"\]\.taps\[\d+\]$')
-_UNESCAPE = _re_mod.compile(r'\\(.)')
-
-
 def _owner_node(tap):
     """The analyzer node that owns this tap PropertyGroup, or None.
 
-    Resolved from the tap's own RNA path, not by tap_id: a duplicated
+    Matched by identity (the tap's RNA pointer), not by tap_id: a duplicated
     analyzer keeps its taps' ids (drivers and links reference them), so an
-    id search could land on the original node instead of the copy. The id
-    search is kept only as a fallback if the path cannot be read.
+    id search could land on the original node instead of the copy - and
+    toggling Accumulate on the copy would reset the original's total.
+    (path_from_id() would be the obvious route, but Blender cannot build a
+    path for a PropertyGroup inside a Python node.) The id search remains
+    only as a fallback.
     """
     tree = getattr(tap, "id_data", None)
     if tree is None:
         return None
+    analyzers = [n for n in getattr(tree, "nodes", [])
+                 if n.bl_idname == 'AudioFFTAnalyzerNode']
     try:
-        match = _TAP_PATH.match(tap.path_from_id())
-        if match:
-            node = tree.nodes.get(_UNESCAPE.sub(r"\1", match.group(1)))
-            if (node is not None
-                    and node.bl_idname == 'AudioFFTAnalyzerNode'
-                    and any(t.as_pointer() == tap.as_pointer()
-                            for t in node.taps)):
-                return node
+        pointer = tap.as_pointer()
+        for n in analyzers:
+            for t in n.taps:
+                if t.as_pointer() == pointer:
+                    return n
     except Exception:
         pass
-    for n in getattr(tree, "nodes", []):
-        if n.bl_idname != 'AudioFFTAnalyzerNode':
-            continue
+    for n in analyzers:
         for t in n.taps:
             if t.tap_id == tap.tap_id:
                 return n
