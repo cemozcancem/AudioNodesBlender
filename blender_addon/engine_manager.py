@@ -541,6 +541,12 @@ def restore_saved_audio_devices() -> bool:
     """
     _device_restore_errors.clear()
 
+    # No engine, nothing to restore. Without this check each saved device
+    # would wait out the full device-switch timeout (about 20 s) before
+    # giving up, with Blender frozen the whole time.
+    if not is_engine_running():
+        return False
+
     # Find any AudioNodesData with saved devices (we only have one scene
     # in normal use, but iterate to be safe).
     for scene in bpy.data.scenes:

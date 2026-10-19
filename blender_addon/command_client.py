@@ -69,6 +69,22 @@ _PARAM_FLUSH_INTERVAL = 0.033
 # Per-message retry count before a command is dropped (with a log line).
 _SEND_RETRIES = 3
 
+# How long the engine itself waits for one device switch. Must match
+# `future.wait_for(std::chrono::seconds(N))` in runOnMessageThread() in
+# engine/src/AudioEngine.cpp. A set_device command waits there exactly once
+# (the whole fallback ladder runs inside that single wait), so this is the
+# engine's worst case for one switch. Change both sides together; an offline
+# test compares them.
+ENGINE_DEVICE_SWITCH_LIMIT_S = 15
+
+# Extra time on top of the engine's limit for the reply to arrive.
+DEVICE_SWITCH_MARGIN_S = 5
+
+# Reply timeout for slow (device) commands. Waiting less than the engine
+# made a switch that took 10-15 s look like a failure even though it worked.
+# tests/harness.py (Engine.SLOW_COMMANDS) uses the same 20 s.
+SLOW_COMMAND_TIMEOUT_MS = (ENGINE_DEVICE_SWITCH_LIMIT_S + DEVICE_SWITCH_MARGIN_S) * 1000
+
 
 def get_port():
     """Get the ZMQ port from preferences.
@@ -584,7 +600,7 @@ def set_pattern(node_id: str, lane: int, pattern: int) -> bool:
 
 
 def send_slow_command(command: Dict[str, Any],
-                      timeout_ms: int = 10000) -> Optional[Dict[str, Any]]:
+                      timeout_ms: int = SLOW_COMMAND_TIMEOUT_MS) -> Optional[Dict[str, Any]]:
     """Send a command that can take many seconds, on its own socket.
 
     Device switches tear down and reopen the audio device, which on
@@ -593,6 +609,10 @@ def send_slow_command(command: Dict[str, Any],
     reported a failure for a switch the engine went on to complete -
     the coin-flip "engine won't start on external headphones". A private
     socket also keeps the long wait off the shared REQ/REP alternation.
+
+    The default timeout is longer than the engine's own device-switch
+    limit (see SLOW_COMMAND_TIMEOUT_MS), so the engine always answers
+    first - with success or with a real error message.
     """
     if not HAS_ZMQ:
         return None

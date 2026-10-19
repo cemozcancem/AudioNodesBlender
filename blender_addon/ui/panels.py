@@ -271,7 +271,13 @@ class AUDIONODES_OT_set_device(bpy.types.Operator):
     device_name: bpy.props.StringProperty()
     
     def execute(self, context):
-        from .. import command_client
+        from .. import command_client, engine_manager
+
+        # Without a running engine the switch can only time out, which
+        # would freeze Blender for the full device-switch wait.
+        if not engine_manager.is_engine_running():
+            self.report({'WARNING'}, "The audio engine is not running. Start it first.")
+            return {'CANCELLED'}
 
         result = command_client.set_device(self.device_type, self.device_name)
         if result.get("ok"):
